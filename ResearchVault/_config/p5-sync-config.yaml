@@ -1,0 +1,132 @@
+# P5 이슈 동기화 설정
+
+# Google Sheets 설정
+# Google Sheet URL: https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit
+# 아래에 /d/ 뒤의 ID를 입력하세요
+spreadsheet_id: "1PEUylHx689l8jhfC3rB8Imub5YQnOPAW1CH6qbaw73s"
+
+# 시트 탭 이름
+sheet_name: "접수 메일"
+
+# 컬럼 매핑 (Google Sheets 컬럼명 → Frontmatter 필드)
+# 실제 Sheets 컬럼에 맞게 수정됨 (2026-02-06)
+column_mapping:
+  "NO": issue_id
+  이슈명: title
+  상태: issue_status
+  담당자: owner
+  마감일: due_date
+  긴급도: priority
+  공법구분: category
+  상세내용(Spec): description
+  관련도면: related_docs
+  수신일: created_at
+  위치(Zone): zone
+  발생원: source_origin
+  조치계획: action_plan
+  결정사항: decision
+
+# 상태 매핑 (한글 → 영문)
+status_mapping:
+  열림: open
+  진행중: in_progress
+  완료: resolved
+  종료: closed
+  보류: on_hold
+
+# 우선순위 매핑
+priority_mapping:
+  긴급: critical
+  높음: high
+  중간: medium
+  낮음: low
+
+# 자동 동기화 설정 (향후 watchdog 연동용)
+auto_sync:
+  enabled: false
+  interval_minutes: 30
+
+# ─── 계층별 동기화 ──────────────────────────────────────────
+tiered_sync:
+  enabled: true
+  tier1_active:
+    criteria:
+      priority: [critical, high]
+      status: [open, in_progress]
+      max_age_days: 14
+    sync_mode: full
+  tier2_watch:
+    criteria:
+      priority: [medium]
+      status: [open, in_progress, on_hold]
+      max_age_days: 30
+    sync_mode: metadata_only
+  tier3_archive:
+    criteria:
+      status: [closed, resolved]
+    sync_mode: none
+
+# ─── Notion 동기화 설정 ─────────────────────────────────────
+notion_sync:
+  enabled: true
+  push_fields: [상태, 담당자, 결정사항, 조치계획]
+  sync_direction: bidirectional  # sheets_to_notion | notion_to_sheets | bidirectional
+  update_notion_url: true        # Sheets에 NotionURL 자동 기록
+
+# ─── 역방향 동기화 (Vault → Sheets) ─────────────────────────
+reverse_sync:
+  enabled: true
+  fields: [owner, due_date, issue_status, decision]
+  only_fill_empty: true  # Sheets에 값 있으면 건드리지 않음
+  reverse_column_mapping:
+    owner: "담당자"
+    due_date: "마감일"
+    issue_status: "상태"
+    decision: "결정사항"
+
+# ─── OCR 설정 (GLM-OCR via Ollama) ─────────────────────────
+ocr:
+  enabled: true
+  ollama_url: "http://localhost:11434"
+  model: "glm-ocr"
+  max_pages_per_pdf: 10
+  timeout_per_image_sec: 60
+  retry_count: 3
+  eligible_extensions: [".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"]
+  skip_extensions: [".dwg", ".dxf", ".zip", ".rar", ".exe"]
+  max_file_size_mb: 50
+  cache_enabled: true
+  attachment_dir: "ResearchVault/00-Inbox/Messages/Emails/Attachments"
+  drawing_patterns:
+    - "[A-Z]{2,}-\\d{3,}"
+    - "S-\\d{3,}"
+    - "SHOP[-_]R(?:ev)?\\d+"
+    - "EP[-_]\\d{2,}"
+    - "PSRC[-_]\\d{2,}"
+    - "HMB[-_]\\d{2,}"
+
+  # ─── 이미지 전처리 (Pillow, OCR 전 적용) ────────────────────
+  preprocessing:
+    enabled: false              # 기본 off (하위호환)
+    grayscale: true             # 스캔 문서 그레이스케일
+    autocontrast: true          # 자동 대비 보정
+    autocontrast_cutoff: 1      # autocontrast cutoff (%)
+    denoise: true               # 미디안 필터 노이즈 제거
+    denoise_size: 3             # 미디안 필터 커널 크기 (홀수)
+    sharpen: true               # 언샤프 마스크
+    sharpen_radius: 2.0
+    sharpen_percent: 150
+    sharpen_threshold: 3
+
+  # ─── 확신도 임계값 ──────────────────────────────────────────
+  confidence:
+    link_threshold: 0.5         # 이슈 링킹 최소 확신도
+    high_confidence: 0.8        # 고확신도 (트리아지 +2)
+    medium_confidence: 0.5      # 중확신도 (트리아지 +1)
+    low_confidence_action: log_only  # log_only | skip | include
+
+  # ─── OCR 교정 설정 ─────────────────────────────────────────
+  corrections:
+    enabled: true
+    corrections_file: "ResearchVault/_config/ocr-corrections.yaml"
+    auto_apply: true            # 별칭 자동 적용

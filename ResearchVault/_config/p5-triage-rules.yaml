@@ -1,0 +1,203 @@
+# P5 메일 트리아지 규칙 설정
+# 메일 → 분류/점수화 → 이슈 반영 → 승인 4단계 파이프라인
+
+# ─── 자동화 수준 ─────────────────────────────────────────────
+# L1: 태깅만  |  L2: 이슈 업데이트 제안  |  L2.5: 고점수 자동+저점수 제안  |  L3: 자동 업데이트
+automation_level: L2
+auto_apply_threshold: 8   # L2.5 모드: --auto-apply-above 사용 시 이 점수 이상 자동 적용
+
+# ─── L3 자동 전환 설정 ───────────────────────────────────────
+l3_config:
+  enabled: false                    # true로 변경 시 L3 활성화 시도
+  transition_criteria:
+    min_accuracy: 90                # 전환 조건: 정확도 90% 이상
+    consecutive_weeks: 2            # 연속 2주 이상 유지
+    min_samples: 20                 # 최소 판정 샘플 20개
+  rollback_criteria:
+    accuracy_floor: 80              # 80% 미만 시 자동 L2.5 복귀
+  safety_limits:
+    max_auto_apply_per_run: 20      # 1회 실행당 최대 자동 적용 건수
+  audit_log: "triage-audit-log.jsonl"   # 00-Overview/ 하위 자동 생성
+
+# ─── 발신자 규칙 ─────────────────────────────────────────────
+sender_rules:
+  # 도메인별 기본 설정
+  domains:
+    samsung.com:
+      org: "삼성 E&A"
+      priority_weight: 3
+      default_assignee: ""
+    senkuzo.com:
+      org: "센구조"
+      priority_weight: 2
+      default_assignee: ""
+    endmall.co.kr:
+      org: "이앤디몰"
+      priority_weight: 2
+      default_assignee: ""
+    samwoo.com:
+      org: "삼우"
+      priority_weight: 2
+      default_assignee: ""
+    jungrim.com:
+      org: "정림건축"
+      priority_weight: 1
+      default_assignee: ""
+  
+  # 개인 메일 별도 규칙 (VIP 처리)
+  individuals:
+    "sk-.kang@samsung.com":
+      name: "강상규"
+      org: "삼성 E&A"
+      priority_weight: 4
+      role: "현장 담당"
+    "dhlee@senkuzo.com":
+      name: "이동혁 소장"
+      org: "센구조"
+      priority_weight: 3
+      role: "EPC팀"
+    "ihlee@senkuzo.com":
+      name: "이인호 이사"
+      org: "센구조"
+      priority_weight: 4
+      role: "EPC팀"
+
+# ─── 키워드 규칙 ─────────────────────────────────────────────
+keyword_rules:
+  # 카테고리 매핑 (키워드 → 카테고리)
+  categories:
+    구조접합:
+      keywords: ["SS-Splice", "기둥이음", "PSRC", "HMB", "접합부", "Splice"]
+      weight: 2
+    간섭:
+      keywords: ["Embedded Plate", "간섭", "충돌", "interference", "간섭검토"]
+      weight: 3
+    일정:
+      keywords: ["Shop Dwg", "지연", "일정", "납기", "공정", "발주", "제작"]
+      weight: 2
+    상세변경:
+      keywords: ["방진패드", "슬롯홀", "상세", "디테일", "Detail"]
+      weight: 1
+    설계:
+      keywords: ["구조계산", "설계변경", "하중", "단면", "부재력"]
+      weight: 2
+    PC연동:
+      keywords: ["PC거더", "PC부재", "이앤디몰", "코어이동"]
+      weight: 2
+      
+  # 행동 키워드 (액션 필요 여부)
+  actions:
+    urgent:
+      keywords: ["긴급", "URGENT", "즉시", "ASAP", "당장", "금일"]
+      weight: 4
+    request:
+      keywords: ["검토요청", "회신요청", "확인요청", "요청드립니다", "부탁드립니다"]
+      weight: 2
+    fyi:
+      keywords: ["참조", "FYI", "공유", "안내", "송부"]
+      weight: 0
+
+# ─── 점수 기반 라우팅 ────────────────────────────────────────
+scoring:
+  # 최종 우선순위 결정 기준
+  thresholds:
+    critical: 8   # score >= 8
+    high: 5       # 5 <= score < 8
+    medium: 2     # 2 <= score < 5
+    low: 0        # score < 2
+  
+  # 추가 가중치
+  modifiers:
+    has_attachment: 1        # 첨부파일 있음
+    has_deadline_mention: 2  # 마감일 언급
+    is_reply_chain: -1       # RE/FW 체인 (신규 이슈 아닐 가능성)
+    has_drawing_ref: 2       # 도면 번호 언급
+
+# ─── 이슈 매칭 규칙 ──────────────────────────────────────────
+issue_matching:
+  # 매칭 우선순위 (순서대로 시도)
+  priority:
+    - issue_id        # 메일에서 이슈ID 직접 언급
+    - title_similarity  # 제목 유사도 (threshold 이상)
+    - keyword_assignee  # 키워드 + 담당자 조합
+  
+  # 제목 유사도 임계값 (0-1)
+  title_similarity_threshold: 0.7
+  
+  # 매칭 실패 시 행동
+  on_no_match: create_new  # create_new | flag_for_review | ignore
+
+# ─── 상태 변경 제한 ──────────────────────────────────────────
+status_control:
+  # 자동 변경 가능한 상태
+  auto_allowed:
+    - open
+    - in_progress
+  
+  # 수동 승인 필요 (자동 변경 불가)
+  manual_only:
+    - resolved
+    - closed
+  
+  # 상태 전이 규칙
+  transitions:
+    open: [in_progress, on_hold]
+    in_progress: [on_hold]
+    on_hold: [open, in_progress]
+
+# ─── 메일 본문 정제 ──────────────────────────────────────────
+sanitization:
+  # 제거할 패턴
+  remove_patterns:
+    - "^>.*$"                    # 인용문
+    - "^On .* wrote:$"           # 영문 인용 헤더
+    - "^-{3,}.*Original Message.*-{3,}$"  # 원본 메시지 구분선
+    - "보낸 사람:.*$"            # 한글 인용 헤더
+    - "^Sent from my.*$"         # 모바일 서명
+    - "이 메일은 .*에서 보내드렸습니다"  # 자동 서명
+  
+  # 서명 시작 표시 (이후 내용 제거)
+  signature_markers:
+    - "---"
+    - "--"
+    - "Best regards"
+    - "감사합니다"
+    - "Tel:"
+    - "Mobile:"
+
+# ─── 주간 보고서 설정 ────────────────────────────────────────
+weekly_report:
+  # 포함할 예외 항목
+  include:
+    - unmatched_emails      # 매칭 실패 메일
+    - no_assignee           # 담당자 미지정 이슈
+    - no_deadline_high      # 기한 없는 high 이슈
+    - stale_issues          # 7일 이상 미갱신
+  
+  # 생성 경로
+  output_path: "ResearchVault/P5-Project/00-Overview/주간예외보고서.md"
+
+# ─── 노이즈 필터 (트리아지 전 단계) ──────────────────────
+noise_filter:
+  enabled: true
+  sender_blacklist:
+    domains: [linkedin.com, licdn.com, facebookmail.com, accounts.google.com]
+    patterns: ["noreply@", "no-reply@", "newsletter@", "marketing@", "notification@"]
+  subject_blacklist:
+    - "님을 추가하세요"
+    - "connection request"
+    - "뉴스레터"
+    - "unsubscribe"
+    - "password reset"
+    - "결재.*완료.*알림"
+    - "전자결재.*의견"
+  project_scope:
+    p5_positive_keywords: [P5, 복합동, PSRC, HMB, SS-Splice, 기둥이음, Embedded Plate,
+      SEN-, 센구조, ENA, 삼우, 이앤디몰, SHOP, 앵커, 주각부, 임베드]
+    non_p5_keywords: [용인 단지, 용인단지, 우리들교회, 리마건축]
+    off_project_action: skip
+  deduplication:
+    enabled: true
+    strip_prefixes: ["RE: RE: RE:", "RE: RE:", "FW: RE:", "RE: FW:", "RE:", "Re:", "FW:", "Fw:"]
+    keep_latest_only: true
+    window_hours: 168

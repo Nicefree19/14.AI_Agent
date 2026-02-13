@@ -1,0 +1,53 @@
+# ─── Ingest Gate Policy ─────────────────────────────────────
+# Phase 1: 4분류 (Action/Decision/Reference/Trash)
+# WIP 상한, TTL 수명관리, 격리(Quarantine) 정책
+
+classification:
+  trash:
+    score_threshold: 2        # total_score < 2
+    actionability_threshold: 1  # AND actionability < 1
+  action:
+    actionability_threshold: 3  # actionability >= 3 OR urgent/request keyword
+  decision:
+    requires_action_plan: true  # 매칭 이슈에 action_plan 존재
+    requires_empty_decision: true  # AND decision 필드 비어있음
+
+wip:
+  max_active_issues: 15
+  overflow_action: "wip_overflow"
+  count_statuses: ["open", "in_progress"]
+  count_priorities: ["high", "critical"]
+
+ttl:
+  reference_days: 90
+  quarantine_days: 7
+
+paths:
+  quarantine_dir: "ResearchVault/00-Inbox/Quarantine"
+  archive_dir: "ResearchVault/04-Archive"
+
+issue_lifecycle:
+  fresh_days: 14            # created_at 기준 fresh 기간
+  triage_fresh_days: 30     # last_triage_at 기준 fresh 기간
+  aging_days: 30            # priority 다운그레이드 시점 (활동 없는 날수)
+  stale_days: 60            # on_hold 전환 시점
+  dormant_days: 90          # resolved 전환 시점
+  aging_downgrade_from: ["high"]
+  aging_downgrade_to: "medium"
+
+vip_sender_weight_threshold: 3
+
+actionability:
+  urgent_keyword_bonus: 2
+  request_keyword_bonus: 1
+  deadline_mention_bonus: 1
+  vip_sender_bonus: 1
+  fyi_keyword_penalty: -1
+  reply_chain_penalty: -1
+
+novelty:
+  first_conversation_bonus: 2
+  new_attachments_bonus: 1
+  new_drawing_refs_bonus: 1
+  high_match_confidence_penalty: -1
+  confidence_threshold: 0.8

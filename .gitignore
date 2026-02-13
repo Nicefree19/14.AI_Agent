@@ -1,0 +1,37 @@
+# Environment secrets
+.env
+.secrets/
+
+# Agent runtime
+.agent/
+
+# Virtual environments
+.venv/
+.agent_venv/
+.mypy_cache/
+
+# Logs
+*.log
+
+# Misc
+nul
+cookies.txt
+
+# Telegram bot runtime data
+telegram_data/
+
+# Lock files
+*.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

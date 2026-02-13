@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "notebooklm": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--python", "D:\\00.Work_AI_Tool\\14.AI_Agent\\.agent_venv\\Scripts\\python.exe",
+        "D:\\00.Work_AI_Tool\\14.AI_Agent\\scripts\\run_mcp.py"
+      ],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@anthropic/mcp-server-filesystem",
+        "D:\\00.Work_AI_Tool\\14.AI_Agent\\ResearchVault"
+      ]
+    }
+  }
+}

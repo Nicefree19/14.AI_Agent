@@ -1,0 +1,94 @@
+# Message Collection Configuration
+# ResearchVault 메시지 통합 수집 설정
+version: "1.0"
+
+# ─── Storage Settings ───────────────────────────────────────
+storage:
+  base_path: "D:/00.Work_AI_Tool/14.AI_Agent/ResearchVault/00-Inbox/Messages"
+
+# ─── Adapter Configuration ──────────────────────────────────
+adapters:
+  # IMAP (Gmail, etc.)
+  imap:
+    enabled: false  # Requires email_config.json setup
+    poll_interval_minutes: 10
+    config_file: "D:/00.Work_AI_Tool/14.AI_Agent/email_config.json"
+    fetch_options:
+      folder: "inbox"
+      criteria: "UNSEEN"
+      limit: 10
+
+  # Outlook COM (Local Outlook installation)
+  outlook:
+    enabled: true
+    poll_interval_minutes: 5
+    fetch_options:
+      folder: "inbox"
+      unread_only: false
+      limit: 10
+
+  # KakaoTalk (Manual import only)
+  kakao:
+    enabled: true
+    # KakaoTalk은 폴링 불가, 수동 임포트만 지원
+    # Import 폴더에 .txt 파일 드롭 시 자동 처리
+
+  # Telegram (Layer A: passive JSON reader, Layer B: active polling)
+  telegram:
+    enabled: true           # .env에 TELEGRAM_BOT_TOKEN 설정 완료
+    data_dir: "telegram_data"
+    poll_interval_minutes: 5
+    # Layer B (telegram_runner) 설정은 .env에서 관리:
+    #   TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USERS, TELEGRAM_POLLING_INTERVAL
+
+# ─── Processing Options ─────────────────────────────────────
+processing:
+  # 자동 태그 추가
+  auto_tag: true
+
+  # 중복 메시지 필터링
+  dedup_enabled: true
+  dedup_by: "message_id"  # message_id, hash, or subject_sender
+
+  # 제목 기반 자동 분류 (향후 확장)
+  auto_classify: false
+  # classify_rules:
+  #   - pattern: "Invoice|Receipt|결제"
+  #     tag: "finance/transaction"
+  #   - pattern: "Meeting|회의"
+  #     tag: "calendar/meeting"
+
+# ─── Daemon Settings ────────────────────────────────────────
+daemon:
+  # 파일 변경 감지 디바운스 (초)
+  debounce_seconds: 2
+
+  # 실패 시 재시도 횟수
+  max_retries: 3
+
+  # 로그 파일
+  log_file: "D:/00.Work_AI_Tool/14.AI_Agent/scripts/message_daemon.log"
+
+# ─── Output Format ──────────────────────────────────────────
+output:
+  # Frontmatter 스키마
+  frontmatter_schema:
+    type: "message"
+    source_type: "email|chat"
+    source_adapter: "imap|outlook|kakao|telegram"
+    id: "<unique_id>"
+    date: "YYYY-MM-DD"
+    timestamp: "ISO8601"
+    sender: "Name <email>"
+    subject: ""
+    status: "inbox"
+    tags: ["message/email"]
+    imported_at: "ISO8601"
+
+  # 파일명 패턴
+  filename_pattern: "{date}_{adapter}_{subject_slug}.md"
+
+  # 일일 다이제스트 (채팅용)
+  daily_digest:
+    enabled: true
+    group_by: "date"

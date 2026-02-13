@@ -1,0 +1,11 @@
+# watchdog 동기화 설정
+watch_path: "D:\\00.Work_AI_Tool\\14.AI_Agent\\ResearchVault"
+file_patterns:
+  - "*.md"
+ignore_patterns:
+  - ".obsidian/*"
+  - ".trash/*"
+  - "_config/*"
+debounce_seconds: 2
+max_retries: 3
+log_file: "D:\\00.Work_AI_Tool\\14.AI_Agent\\scripts\\sync.log"
