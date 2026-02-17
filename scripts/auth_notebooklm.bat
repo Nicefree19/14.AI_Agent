@@ -11,7 +11,7 @@ echo 브라우저 창이 열리면 Google 계정으로 로그인해주세요.
 echo 로그인이 완료되면 자동으로 창이 닫히거나, 완료 메시지가 표시됩니다.
 echo.
 
-cd /d "D:\00.Work_AI_Tool\14.AI_Agent"
+cd /d "%~dp0.."
 call .agent_venv\Scripts\activate.bat
 
 echo 인증 프로세스 시작...

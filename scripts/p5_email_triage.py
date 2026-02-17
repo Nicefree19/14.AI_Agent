@@ -27,28 +27,25 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
 
 import yaml
 
+# ─── sys.path 보정 (bare import 호환) ──────────────────────
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
 # ─── Configuration ──────────────────────────────────────────
-SCRIPT_DIR = Path(__file__).parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-VAULT_PATH = PROJECT_ROOT / "ResearchVault"
-INBOX_DIR = VAULT_PATH / "00-Inbox" / "Messages" / "Emails"
-ISSUES_DIR = VAULT_PATH / "P5-Project" / "01-Issues"
-TRIAGE_RULES_PATH = VAULT_PATH / "_config" / "p5-triage-rules.yaml"
+from p5_config import (
+    SCRIPT_DIR, PROJECT_ROOT, VAULT_PATH,
+    INBOX_DIR, ISSUES_DIR, TRIAGE_RULES_PATH, INGEST_POLICY_PATH,
+)
+from p5_utils import setup_logger
+
 LOG_FILE = SCRIPT_DIR / "p5_email_triage.log"
 
 
 # ─── Logging Setup ──────────────────────────────────────────
 def setup_logging(debug: bool = False) -> logging.Logger:
     level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.FileHandler(LOG_FILE, encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-    return logging.getLogger("p5_email_triage")
+    return setup_logger("p5_email_triage", LOG_FILE, level)
 
 
 log = setup_logging()
@@ -151,8 +148,6 @@ class TriageRules:
 
 
 # ─── Ingest Policy ─────────────────────────────────────────
-INGEST_POLICY_PATH = VAULT_PATH / "_config" / "ingest-policy.yaml"
-
 _INGEST_DEFAULTS = {
     "classification": {
         "trash": {"score_threshold": 2, "actionability_threshold": 1},

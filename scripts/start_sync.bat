@@ -5,7 +5,7 @@ echo   ResearchVault → NotebookLM 동기화
 echo ========================================
 echo.
 
-cd /d "D:\00.Work_AI_Tool\14.AI_Agent"
+cd /d "%~dp0.."
 
 :: agent_venv 활성화
 call .agent_venv\Scripts\activate.bat

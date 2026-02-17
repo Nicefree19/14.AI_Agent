@@ -4,9 +4,9 @@ Uses pywin32 COM interface to access local Outlook installation.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from .base import MessageAdapter, UnifiedMessage
 
@@ -263,6 +263,259 @@ class OutlookAdapter(MessageAdapter):
             log.error(f"Failed to get attachments: {e}")
 
         return saved
+
+    # ── 이메일 검색 ──────────────────────────────────────────────
+
+    def search_emails(
+        self,
+        sender: Optional[str] = None,
+        subject: Optional[str] = None,
+        keyword: Optional[str] = None,
+        folder: str = "inbox",
+        limit: int = 5,
+        days_back: int = 7,
+        has_attachments: bool = False,
+    ) -> List[UnifiedMessage]:
+        """Search emails using Outlook Restrict() DASL filters.
+
+        Args:
+            sender: Partial sender name or email to filter
+            subject: Partial subject text to filter
+            keyword: Keyword to search in subject + body
+            folder: Outlook folder name
+            limit: Maximum results
+            days_back: Only search emails within this many days
+            has_attachments: If True, only return emails with attachments
+
+        Returns:
+            List of matching UnifiedMessage objects
+        """
+        if not self._initialized:
+            if not self.initialize():
+                return []
+
+        outlook_folder = self._get_folder(folder)
+        if not outlook_folder:
+            log.warning(f"Folder not found: {folder}")
+            return []
+
+        try:
+            items = outlook_folder.Items
+            items.Sort("[ReceivedTime]", True)
+
+            # Build DASL restriction filter
+            filters = []
+            cutoff = datetime.now() - timedelta(days=days_back)
+            cutoff_str = cutoff.strftime("%m/%d/%Y %H:%M %p")
+            filters.append(f"[ReceivedTime] >= '{cutoff_str}'")
+
+            if sender:
+                filters.append(
+                    f"@SQL=\"urn:schemas:httpmail:fromemail\" LIKE '%{sender}%'"
+                    f" OR \"urn:schemas:httpmail:fromname\" LIKE '%{sender}%'"
+                )
+            if subject:
+                filters.append(
+                    f"@SQL=\"urn:schemas:httpmail:subject\" LIKE '%{subject}%'"
+                )
+
+            # Apply date restriction first (always safe)
+            restricted = items.Restrict(filters[0])
+
+            messages: List[UnifiedMessage] = []
+            count = 0
+
+            for item in restricted:
+                if count >= limit:
+                    break
+                try:
+                    if item.Class != 43:
+                        continue
+
+                    # Post-filter: sender
+                    if sender:
+                        item_sender = self._get_sender(item).lower()
+                        if sender.lower() not in item_sender:
+                            continue
+
+                    # Post-filter: subject
+                    if subject:
+                        item_subject = (item.Subject or "").lower()
+                        if subject.lower() not in item_subject:
+                            continue
+
+                    # Post-filter: keyword (subject + body)
+                    if keyword:
+                        combined_text = (
+                            (item.Subject or "") + " " + (item.Body or "")
+                        ).lower()
+                        if keyword.lower() not in combined_text:
+                            continue
+
+                    # Post-filter: attachments
+                    if has_attachments and item.Attachments.Count == 0:
+                        continue
+
+                    unified_msg = UnifiedMessage(
+                        id=item.EntryID,
+                        source_type="email",
+                        source_adapter="outlook",
+                        sender=self._get_sender(item),
+                        subject=item.Subject or "",
+                        body=item.Body or "",
+                        timestamp=self._convert_datetime(item.ReceivedTime),
+                        raw_metadata={
+                            "folder": folder,
+                            "unread": item.UnRead,
+                            "importance": item.Importance,
+                            "has_attachments": item.Attachments.Count > 0,
+                            "attachment_count": item.Attachments.Count,
+                            "attachment_names": [
+                                att.FileName for att in item.Attachments
+                            ] if item.Attachments.Count > 0 else [],
+                            "categories": item.Categories or "",
+                        },
+                    )
+                    messages.append(unified_msg)
+                    count += 1
+
+                except Exception as e:
+                    log.warning(f"search_emails: failed to process item: {e}")
+                    continue
+
+            log.info(f"search_emails: found {len(messages)} emails")
+            return messages
+
+        except Exception as e:
+            log.error(f"search_emails error: {e}")
+            return []
+
+    # ── 이메일 발송 ──────────────────────────────────────────────
+
+    def send_email(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: Optional[str] = None,
+        attachments: Optional[List[str]] = None,
+        html_body: bool = False,
+    ) -> Dict:
+        """Send a new email via Outlook COM.
+
+        Args:
+            to: Recipient email address(es), semicolon-separated
+            subject: Email subject line
+            body: Email body text
+            cc: CC recipient(s), semicolon-separated
+            attachments: List of file paths to attach
+            html_body: If True, set body as HTML
+
+        Returns:
+            dict with success status and details
+        """
+        if not self._initialized:
+            if not self.initialize():
+                return {"success": False, "error": "Outlook not initialized"}
+
+        try:
+            mail = self.outlook.CreateItem(0)  # olMailItem = 0
+            mail.To = to
+            mail.Subject = subject
+
+            if html_body:
+                mail.HTMLBody = body
+            else:
+                mail.Body = body
+
+            if cc:
+                mail.CC = cc
+
+            if attachments:
+                for fpath in attachments:
+                    p = Path(fpath)
+                    if p.exists():
+                        mail.Attachments.Add(str(p.resolve()))
+                    else:
+                        log.warning(f"send_email: attachment not found: {fpath}")
+
+            mail.Send()
+            log.info(f"send_email: sent to {to} — {subject}")
+
+            return {
+                "success": True,
+                "to": to,
+                "cc": cc or "",
+                "subject": subject,
+                "attachment_count": len(attachments) if attachments else 0,
+            }
+
+        except Exception as e:
+            log.error(f"send_email error: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ── 이메일 회신 ──────────────────────────────────────────────
+
+    def reply_email(
+        self,
+        message_id: str,
+        body: str,
+        reply_all: bool = False,
+        attachments: Optional[List[str]] = None,
+    ) -> Dict:
+        """Reply to an existing email via Outlook COM.
+
+        Args:
+            message_id: EntryID of the original message
+            body: Reply body text (prepended to original)
+            reply_all: If True, use ReplyAll instead of Reply
+            attachments: List of file paths to attach
+
+        Returns:
+            dict with success status and details
+        """
+        if not self._initialized:
+            if not self.initialize():
+                return {"success": False, "error": "Outlook not initialized"}
+
+        try:
+            item = self.namespace.GetItemFromID(message_id)
+
+            if reply_all:
+                reply = item.ReplyAll()
+            else:
+                reply = item.Reply()
+
+            # Prepend new body before original quoted text
+            reply.Body = body + "\n\n" + reply.Body
+
+            if attachments:
+                for fpath in attachments:
+                    p = Path(fpath)
+                    if p.exists():
+                        reply.Attachments.Add(str(p.resolve()))
+                    else:
+                        log.warning(f"reply_email: attachment not found: {fpath}")
+
+            reply.Send()
+
+            to_addr = reply.To or ""
+            subj = reply.Subject or ""
+            log.info(f"reply_email: replied to {to_addr} — {subj}")
+
+            return {
+                "success": True,
+                "to": to_addr,
+                "subject": subj,
+                "reply_all": reply_all,
+                "attachment_count": len(attachments) if attachments else 0,
+            }
+
+        except Exception as e:
+            log.error(f"reply_email error: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ── 캘린더 ───────────────────────────────────────────────────
 
     def get_calendar_items(self, days_ahead: int = 7) -> List[dict]:
         """

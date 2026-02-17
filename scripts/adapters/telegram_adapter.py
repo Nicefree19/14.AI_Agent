@@ -116,10 +116,16 @@ class TelegramAdapter(MessageAdapter):
             all_messages = data.get("messages", [])
 
             # 마지막 읽기 이후의 새 메시지만 필터링
-            new_messages = [
-                m for m in all_messages
-                if m.get("message_id", 0) > self._last_read_id
-            ]
+            # bot 메시지(type=="bot") 및 비정수 message_id 안전 스킵
+            new_messages = []
+            for m in all_messages:
+                if m.get("type") == "bot":
+                    continue
+                mid = m.get("message_id", 0)
+                if not isinstance(mid, int):
+                    continue
+                if mid > self._last_read_id:
+                    new_messages.append(m)
 
             # limit 적용
             if len(new_messages) > limit:
@@ -138,12 +144,17 @@ class TelegramAdapter(MessageAdapter):
                     log.warning(f"Failed to convert message {msg.get('message_id')}: {e}")
                     continue
 
-            # 마지막 읽기 위치 갱신
+            # 마지막 읽기 위치 갱신 — int ID만 대상
             if unified:
-                max_id = max(m.get("message_id", 0) for m in new_messages)
-                self._last_read_id = max_id
-                self._save_last_read_id()
-                log.info(f"TelegramAdapter fetched {len(unified)} new messages (last_id={max_id})")
+                int_ids = [
+                    m.get("message_id") for m in new_messages
+                    if isinstance(m.get("message_id"), int)
+                ]
+                if int_ids:
+                    max_id = max(int_ids)
+                    self._last_read_id = max_id
+                    self._save_last_read_id()
+                    log.info(f"TelegramAdapter fetched {len(unified)} new messages (last_id={max_id})")
 
             return unified
 

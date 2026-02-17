@@ -20,18 +20,30 @@ D:\00.Work_AI_Tool\14.AI_Agent\
 ├── ResearchVault/                # Obsidian 볼트
 │   ├── P5-Project/              # P5 프로젝트 지식베이스
 │   └── _config/                 # 설정 파일
+├── logs/                         # 에이전트 로그 (자동 로테이션)
+│   └── agent.log                # 5MB × 5 백업 = 최대 25MB
 ├── scripts/
 │   ├── telegram/                # 텔레그램 봇 모듈
+│   │   ├── config.py            # 중앙 설정 (경로/상수)
+│   │   ├── logger.py            # 중앙 로거 (RotatingFileHandler)
 │   │   ├── telegram_bot.py      # 통합 봇 로직 (핵심 API)
 │   │   ├── telegram_sender.py   # 응답 전송기
 │   │   ├── telegram_listener.py # 메시지 수집기
-│   │   └── telegram_runner.py   # 작업 실행기
-│   ├── p5_autoexecutor.bat      # Claude Code 자동 실행기
+│   │   ├── telegram_runner.py   # 작업 실행기
+│   │   ├── telegram_executors.py # 키워드 라우팅 + 실행기
+│   │   ├── kakao_desktop.py     # 카카오톡 PC 자동화 엔진 (MCP)
+│   │   ├── kakao_utils.py       # 카카오톡 파싱 유틸리티
+│   │   ├── cleanup_manager.py   # 디스크 클린업 매니저
+│   │   ├── skills_registry.py   # 스킬 카탈로그
+│   │   └── skills/              # 개별 스킬 모듈
+│   │       └── kakao_live_skills.py # 카카오톡 라이브 스킬 6종
+│   ├── p5_autoexecutor.bat      # Claude Code 자동 실행기 (+일일 클린업)
 │   ├── p5_daily.bat             # 일일 배치
 │   └── p5_daemons_start.bat     # 데몬 시작
 └── telegram_data/               # 텔레그램 데이터 저장소
     ├── telegram_messages.json   # 메시지 내역
     ├── working.json             # 작업 잠금
+    ├── kakao_pending_reply.json # 카카오톡 답장 대기 상태
     └── tasks/                   # 작업 폴더
         ├── index.json           # 작업 인덱스
         └── msg_{id}/            # 개별 작업 폴더
@@ -376,6 +388,33 @@ mark_done_telegram(message_ids)
 
 ---
 
+## 옵시디언 지식베이스 자동 연동
+
+`report_telegram()` 호출 시 작업 결과가 Obsidian 지식베이스에 자동 저장된다.
+
+### 저장 위치
+`ResearchVault/P5-Project/05-WorkLog/` 폴더에 날짜별 마크다운 파일 생성.
+
+### 파일 형식
+```
+2026-02-15-msg124-센코어테크 제작현황 분석.md
+```
+
+### 자동 추출 기능
+- **태그**: 지시사항/결과에서 토픽 자동 분류 (메일, 이슈, 제작, 도면, 브리핑 등)
+- **이슈 링크**: SEN-001 등 이슈 코드 → Obsidian 위키링크 `[[SEN-001]]` 자동 변환
+- **첨부 파일**: 전송 파일명 기록
+
+### 프론트매터 (YAML)
+```yaml
+title: "작업 제목"
+date: 2026-02-15
+message_id: 124
+tags: [project/p5, type/worklog, topic/issue]
+```
+
+---
+
 ## 자동 실행 설정
 
 Windows 작업 스케줄러를 통해 1분마다 자동으로 텔레그램 메시지를 확인하고 처리합니다.
@@ -412,3 +451,78 @@ schtasks /Delete /TN "Claude_P5Agent_14.AI_Agent" /F
 - **위험 매트릭스**: 리스크 시각화 (p5_risk_matrix.py)
 
 텔레그램으로 받은 P5 관련 요청은 위 도구들을 자율적으로 활용하여 처리합니다.
+
+---
+
+## 카카오톡 데스크탑 제어 (Phase 5)
+
+Windows Controller MCP를 활용한 카카오톡 PC 앱 직접 제어.
+
+### 스킬 목록 (6종)
+| 스킬 | 키워드 | 기능 |
+|------|--------|------|
+| `kakao_live_read` | 카톡읽기, 카톡실시간, 카톡라이브 등 | 현재 열린 채팅방 메시지 읽기 (Ctrl+A→Ctrl+C→Get-Clipboard) |
+| `kakao_room_list` | 카톡방목록, 열린카톡 | 열려 있는 채팅방 목록 조회 |
+| `kakao_reply_draft` | 카톡보내, 카톡전송, 카톡입력 | 답장 입력 (Enter 없이 대기 → 확인 요청) |
+| `kakao_send_confirm` | 보내, 전송, ok, ㅇㅋ | 대기 중인 답장 전송 (Enter) |
+| `kakao_send_cancel` | 취소, cancel | 대기 중인 답장 취소 |
+| `kakao_context` | 카톡맥락, 카톡상황, 카톡답변 | 대화 분석 + 답변 제안 |
+
+### 보안 원칙
+- **Enter 키 절대 자동 입력 금지** — 2단계 확인 필수 (Draft → Confirm)
+- **메시지/채팅방 삭제 금지**
+- **파일 전송 금지** (텍스트만)
+- **프리플라이트 체크**: 카카오톡 미실행 시 즉시 에러 반환 (묵음 실패 방지)
+
+### 답장 대기 상태 (`kakao_pending_reply.json`)
+- `kakao_reply_draft` 실행 시 텍스트 입력 후 대기 상태 저장
+- 10분 자동 만료 (만료 시 ESC로 취소 처리)
+- 다음 메시지에서 "보내" → `kakao_send_confirm`, "취소" → `kakao_send_cancel`
+
+---
+
+## 데스크톱 원격 제어
+
+Windows Controller MCP를 활용한 데스크톡 원격 제어. 26개 키워드로 활성화.
+
+| 카테고리 | 키워드 예시 |
+|----------|------------|
+| 스크린샷 | 화면캡처, 스크린샷, 지금화면 |
+| 앱 실행 | 프로그램열기, 실행해줘 |
+| 앱 전환 | 화면전환, 프로그램전환 |
+| 타이핑 | 타이핑, 입력해줘 |
+| 클릭 | 클릭, 마우스 |
+| 파일 찾기 | 파일탐색기, 폴더열기 |
+
+---
+
+## 디스크 관리
+
+### 자동 클린업 (p5_autoexecutor.bat)
+- 1일 1회 자동 실행 (`cleanup_last_run.txt` 마커 파일)
+- 30일 초과 작업 폴더 삭제
+- 처리 완료된 오래된 메시지 정리
+- 고아 인덱스 항목 제거
+
+### 수동 실행
+```bash
+# Dry-run (삭제 없이 확인만)
+python -m scripts.telegram.cleanup_manager --dry-run
+
+# 실제 정리 (30일 초과)
+python -m scripts.telegram.cleanup_manager --days 30
+
+# 보존 기간 변경
+python -m scripts.telegram.cleanup_manager --days 60
+```
+
+---
+
+## 파일 쓰기 안전성
+
+모든 JSON 파일 쓰기는 **원자적 쓰기** 패턴 사용:
+1. 임시 파일(`.tmp`)에 쓰기
+2. `f.flush()` + `os.fsync()` 디스크 동기화
+3. `os.replace()` 원자적 교체
+
+적용 대상: `telegram_messages.json`, `index.json`, `new_instructions.json`, `working.json`, `kakao_pending_reply.json`

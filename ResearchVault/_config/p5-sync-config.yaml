@@ -130,3 +130,9 @@ ocr:
     enabled: true
     corrections_file: "ResearchVault/_config/ocr-corrections.yaml"
     auto_apply: true            # 별칭 자동 적용
+
+# ─── Google Drive 설정 ──────────────────────────────────────
+google_drive:
+  folder_id: ""                 # P5 공유 폴더 ID (Drive URL에서 추출)
+  service_account_email: "p5-sync-agent@model-wave-468712-e5.iam.gserviceaccount.com"
+  max_download_size_mb: 100     # 다운로드 최대 파일 크기 (MB)
