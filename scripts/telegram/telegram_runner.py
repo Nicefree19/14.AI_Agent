@@ -17,6 +17,7 @@ import os
 import traceback
 from typing import Any, Callable, Dict, List
 
+from .config import is_enabled
 from .telegram_bot import (
     check_telegram,
     combine_tasks,
@@ -180,6 +181,32 @@ def run_telegram_task_once(
     finally:
         os.chdir(previous_cwd)
         remove_working_lock()
+
+        # W6: 작업 완료 후 건강 점검 (성공/실패 무관)
+        if is_enabled("proactive_alerts"):
+            try:
+                from .health_monitor import (
+                    run_health_check,
+                    format_alert_message,
+                    should_send_alert,
+                    mark_alert_sent,
+                )
+
+                report = run_health_check()
+                if not report["healthy"] and should_send_alert():
+                    has_critical = any(
+                        c["status"] == "critical" for c in report["checks"]
+                    )
+                    if has_critical:
+                        alert_msg = format_alert_message(report)
+                        send_message_sync(chat_id, alert_msg)
+                        mark_alert_sent()
+                    else:
+                        from .logger import get_logger
+                        _hlog = get_logger("health_monitor")
+                        _hlog.warning("건강 점검 경고: %s", report["summary"])
+            except Exception:
+                pass  # 건강 점검 실패가 본 흐름을 방해하지 않음
 
 
 if __name__ == "__main__":
