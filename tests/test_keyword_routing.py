@@ -235,11 +235,12 @@ class TestGetExecutor:
 class TestFeatureFlags:
     """config.py feature flag 인프라 검증."""
 
-    def test_all_flags_default_off(self):
+    def test_all_flags_graduated_on(self):
+        """W6 졸업 후 모든 flag가 True인지 검증."""
         from scripts.telegram.config import FEATURE_FLAGS
 
-        on_flags = [k for k, v in FEATURE_FLAGS.items() if v]
-        assert not on_flags, f"기본값이 ON인 flag: {on_flags}"
+        off_flags = [k for k, v in FEATURE_FLAGS.items() if not v]
+        assert not off_flags, f"졸업 후 OFF인 flag: {off_flags}"
 
     def test_is_enabled_returns_false_for_unknown(self):
         from scripts.telegram.config import is_enabled
