@@ -1,0 +1,55 @@
+---
+issue_id: SEN-266
+title: AFC 구조도면 발송 시 수정부 CLOUD 표기 및 요약 LIST 누락되어, 돌관공사 환경에서 수정 사항 인지 누락 및 제작 오류 위험이
+  높음.
+issue_status: open
+owner: ''
+due_date: ''
+priority: critical
+category: psrc
+zone: 전층/전구간
+source_origin: 센구조/자체발견
+action_plan: ENA 및 삼우 측에 도면 변경부 CLOUD 표기 및 수정 목록 첨부를 공식 요청하고, 미준수 시 도면 접수를 HOLD 처리하여
+  제작 착수를 방지.
+decision: ''
+created_at: 2025. 12. 24 오후 1:00:58
+updated_at: ''
+source_file: ''
+last_synced_at: '2026-02-07T01:35:05.570798'
+tags:
+- project/p5
+- type/issue
+- status/open
+- priority/critical
+- category/psrc
+---
+
+# AFC 구조도면 발송 시 수정부 CLOUD 표기 및 요약 LIST 누락되어, 돌관공사 환경에서 수정 사항 인지 누락 및 제작 오류 위험이 높음.
+
+## 📋 기본 정보
+
+| 항목 | 내용 |
+|------|------|
+| **이슈 ID** | `SEN-266` |
+| **상태** | 🔴 열림 |
+| **담당자** | - |
+| **마감일** | - |
+| **우선순위** | 🔥 긴급 |
+| **카테고리** | psrc |
+| **위치(Zone)** | 전층/전구간 |
+| **발생원** | 센구조/자체발견 |
+
+## 📝 설명
+
+AFC 도면 전달 시 변경부 'CLOUD' 표기 필수, 수정사항 요약 LIST 첨부 필수, 파일명/폴더 양식 통일 FIX 요청.
+
+## 📌 조치 및 결정
+
+- **조치계획**: ENA 및 삼우 측에 도면 변경부 CLOUD 표기 및 수정 목록 첨부를 공식 요청하고, 미준수 시 도면 접수를 HOLD 처리하여 제작 착수를 방지.
+- **결정사항**: -
+
+## 📅 히스토리
+
+- 생성: 2025. 12. 24 오후 1:00:58
+- 수정: -
+- 동기화: 2026-02-07T01:35:05.570798

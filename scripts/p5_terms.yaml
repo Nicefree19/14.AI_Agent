@@ -1,0 +1,60 @@
+# P5 Project Terminology & Role Dictionary
+# Used by p5_voice_scribe.py for Gemini Context Injection
+
+# 1. Project Terms (Correction Mapping)
+# 오인식되거나 은어로 쓰이는 용어를 정확한 기술/영어 표현으로 매핑
+corrections:
+  # Core Structural Terms
+  "센 구조": "센구조 (SEN Structural Engineers)"
+  "피에스알씨": "PSRC (Prefabricated Steel Reinforced Concrete)"
+  "에이치엠비": "HMB (Hybrid Mega Beam)"
+  "더블에스": "SS-Splice (Column Splice Method)"
+  "샵 드로잉": "Shop DWG (제작도면)"
+  "샵 도면": "Shop DWG (제작도면)"
+  "선출도": "Pre-Release DWG (선출도면)"
+  "임베드": "Embedded Plate (매립전기/설비용)"
+  "엔커": "Anchor Bolt"
+  "앙카": "Anchor Bolt"
+  "주각부": "Column Base (Pedestal)"
+
+  # Project Specifics
+  "공통랙": "Y-1 Common Rack"
+  "와이원": "Y-1 FAB"
+  "피파이브": "P5 Complex"
+  "복합동": "P5 Complex Building"
+  "40톤 리프트": "40-ton Jumbo Lift"
+  "오버브릿지": "Overbridge (OB)"
+  "티씨": "Tower Crane (TC)"
+  "좌대": "TC Foundation Frame (좌대)"
+  "원터치": "One-Touch Coupler"
+
+  # Process
+  "홀드": "HOLD (보류)"
+  "보이드": "VOID (삭제)"
+  "에이에프씨": "AFC (Approved For Construction)"
+  "리비전": "Revision (REV)"
+
+# 2. Key Personnel & Roles (Persona Mapping)
+# 화자 식별 시 권한과 책임의 무게를 판단하기 위함
+people:
+  # Construction (ENA)
+  "김소장": "Construction Manager (Key Decision Maker) - 시공사(ENA) 현장소장"
+  "박공무": "Construction Engineer (Planning) - 시공사(ENA) 공무팀"
+  "최반장": "Site Foreman (Execution) - 시공사(ENA) 작업반장"
+
+  # Design (Samoo/SEN)
+  "삼우": "Master Architect (Original Design) - 원설계사"
+  "구조팀": "Structural Engineer (SEN) - 센구조 담당자"
+  "BIM팀": "BIM Manager (Modeling) - 센구조 BIM팀"
+
+  # Partners
+  "이앤디": "PC Fabricator (E&D Mall) - PC 제작사"
+  "제작공장": "Steel Fabricator - 철골 제작공장"
+
+# 3. Meeting Categories
+# 회의 유형에 따른 기본 태그
+meeting_types:
+  "주간공정": ["type/meeting", "topic/schedule", "priority/high"]
+  "품질점검": ["type/inspection", "topic/quality", "priority/high"]
+  "설계협의": ["type/meeting", "topic/design", "priority/medium"]
+  "안전회의": ["type/meeting", "topic/safety", "priority/critical"]

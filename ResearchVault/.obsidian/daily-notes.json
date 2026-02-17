@@ -1,0 +1,6 @@
+{
+  "folder": "00-Inbox",
+  "template": "Templates/daily-note",
+  "format": "YYYY-MM-DD",
+  "autorun": false
+}

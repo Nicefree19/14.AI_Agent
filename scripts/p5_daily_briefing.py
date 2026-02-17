@@ -22,26 +22,17 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
+# ─── sys.path 보정 (bare import 호환) ──────────────────────
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
 # ─── Configuration ──────────────────────────────────────────
-SCRIPT_DIR = Path(__file__).parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-VAULT_PATH = PROJECT_ROOT / "ResearchVault"
-INBOX_DIR = VAULT_PATH / "00-Inbox" / "Messages" / "Emails"
-ISSUES_DIR = VAULT_PATH / "P5-Project" / "01-Issues"
-OVERVIEW_DIR = VAULT_PATH / "P5-Project" / "00-Overview"
+from p5_config import SCRIPT_DIR, PROJECT_ROOT, VAULT_PATH, INBOX_DIR, ISSUES_DIR, OVERVIEW_DIR
+from p5_utils import setup_logger
 
 LOG_FILE = SCRIPT_DIR / "p5_daily_briefing.log"
-
-# 로깅
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-log = logging.getLogger("p5_daily_briefing")
+log = setup_logger("p5_daily_briefing", LOG_FILE)
 
 
 # ─── p5_email_triage 재사용 ─────────────────────────────────
@@ -318,10 +309,10 @@ class DailyBriefingGenerator:
                 ]:
                     issues.append(
                         {
-                            "id": f.stem,
+                            "id": fm.get("issue_id", f.stem),
                             "title": fm.get("title", "Untitled"),
                             "priority": priority,
-                            "assignee": fm.get("assignee", "Unassigned"),
+                            "owner": fm.get("owner") or "Unassigned",
                         }
                     )
 
@@ -708,7 +699,7 @@ def render_briefing_markdown(data: BriefingData) -> str:
         for issue in data.critical_issues_list:
             icon = "🔴" if issue["priority"] == "critical" else "🟠"
             lines.append(
-                f"| {issue['id']} | {issue['title']} | {issue['assignee']} | {icon} |"
+                f"| {issue['id']} | {issue['title']} | {issue['owner']} | {icon} |"
             )
         lines.append("")
 

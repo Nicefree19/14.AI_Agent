@@ -28,8 +28,9 @@ from adapters import get_adapter, get_all_adapters, list_adapters
 from adapters.registry import _auto_register
 
 # ─── Configuration ──────────────────────────────────────────
-CONFIG_PATH = Path(r"D:\00.Work_AI_Tool\14.AI_Agent\ResearchVault\_config\message-config.yaml")
-DEFAULT_OUTPUT_DIR = Path(r"D:\00.Work_AI_Tool\14.AI_Agent\ResearchVault\00-Inbox\Messages")
+from p5_config import CONFIG_DIR, VAULT_PATH
+CONFIG_PATH = CONFIG_DIR / "message-config.yaml"
+DEFAULT_OUTPUT_DIR = VAULT_PATH / "00-Inbox" / "Messages"
 LOG_FILE = SCRIPT_DIR / "message_daemon.log"
 
 
@@ -418,9 +419,9 @@ class MessageDaemon:
 
             if results:
                 # automation level 확인
-                auto_level = rules.config.get("automation_level", "L2")
-                auto_threshold = rules.config.get("auto_apply_threshold", 8)
-                l3_config = rules.config.get("l3_config", {})
+                auto_level = rules.rules.get("automation_level", "L2")
+                auto_threshold = rules.rules.get("auto_apply_threshold", 8)
+                l3_config = rules.rules.get("l3_config", {})
 
                 # ── L3 판정: 전체 자동 적용 (accuracy 조건 충족 시) ──
                 if auto_level == "L3" and l3_config.get("enabled", False):

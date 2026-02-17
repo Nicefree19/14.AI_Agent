@@ -7,7 +7,7 @@ echo   P5 주간 루틴 - %date%
 echo ============================================================
 echo.
 
-cd /d "D:\00.Work_AI_Tool\14.AI_Agent"
+cd /d "%~dp0.."
 call .agent_venv\Scripts\activate.bat
 
 echo [1/10] Outlook 이메일 전체 수집 + 트리아지...

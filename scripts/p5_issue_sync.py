@@ -27,18 +27,61 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
 
 import yaml
 
+# ─── sys.path 보정 (bare import 호환) ──────────────────────
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
 # ─── Configuration ──────────────────────────────────────────
-SCRIPT_DIR = Path(__file__).parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-VAULT_PATH = PROJECT_ROOT / "ResearchVault"
-ISSUES_DIR = VAULT_PATH / "P5-Project" / "01-Issues"
-CONFIG_PATH = VAULT_PATH / "_config" / "p5-sync-config.yaml"
-CREDENTIALS_PATH = PROJECT_ROOT / ".secrets" / "google-sheets-credentials.json"
+from p5_config import (
+    SCRIPT_DIR,
+    VAULT_PATH,
+    ISSUES_DIR,
+    SYNC_CONFIG_PATH,
+    CREDENTIALS_PATH,
+)
+from p5_utils import setup_logger, load_yaml, parse_frontmatter
+
+CONFIG_PATH = SYNC_CONFIG_PATH  # alias for backward compat
 LOG_FILE = SCRIPT_DIR / "p5_issue_sync.log"
 
 # Google Sheets 설정 (사용자가 수정해야 함)
 DEFAULT_SPREADSHEET_ID = ""  # Google Sheets URL에서 추출
 DEFAULT_SHEET_NAME = "이슈목록"
+
+# ─── Auto-Linker Setup ──────────────────────────────────────
+try:
+    from p5_autolinker import AutoLinker
+
+    _linker = None
+except ImportError:
+    log.warning("p5_autolinker 모듈을 찾을 수 없습니다. 자동 링킹이 비활성화됩니다.")
+    _linker = None
+
+
+def _get_linker():
+    global _linker
+    if _linker is None:
+        try:
+            _linker = AutoLinker()
+            _linker.build_index()
+        except Exception as e:
+            log.error(f"AutoLinker 초기화 실패: {e}")
+
+            # Dummy linker that does nothing
+            class DummyLinker:
+                def link_text(self, t):
+                    return t
+
+            _linker = DummyLinker()
+    return _linker
+
+
+def _auto_link(text: str) -> str:
+    if not text:
+        return text
+    return _get_linker().link_text(text)
+
 
 # 이슈 스키마 매핑 (Google Sheets 컬럼 → Frontmatter 필드)
 # 실제 '접수 메일' 시트 컬럼명과 일치해야 함 (p5-sync-config.yaml 참조)
@@ -90,15 +133,7 @@ CATEGORY_MAPPING = {
 # ─── Logging Setup ──────────────────────────────────────────
 def setup_logging(debug: bool = False) -> logging.Logger:
     level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[
-            logging.FileHandler(LOG_FILE, encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-    return logging.getLogger("p5_issue_sync")
+    return setup_logger("p5_issue_sync", LOG_FILE, level)
 
 
 log = setup_logging()
@@ -155,8 +190,13 @@ class Issue:
         }
 
     def to_markdown(self) -> str:
-        """전체 마크다운 문서 생성"""
+        """전체 마크다운 문서 생성 (Auto-Linked)"""
         fm = self.to_frontmatter()
+
+        # Auto-Linker 적용
+        description = _auto_link(self.description)
+        action_plan = _auto_link(self.action_plan)
+        decision = _auto_link(self.decision)
 
         lines = ["---"]
         lines.append(
@@ -187,18 +227,18 @@ class Issue:
         # 설명
         lines.append("## 📝 설명")
         lines.append("")
-        if self.description:
-            lines.append(self.description)
+        if description:
+            lines.append(description)
         else:
             lines.append("_설명이 없습니다._")
         lines.append("")
 
         # 조치계획 / 결정사항
-        if self.action_plan or self.decision:
+        if action_plan or decision:
             lines.append("## 📌 조치 및 결정")
             lines.append("")
-            lines.append(f"- **조치계획**: {self.action_plan or '-'}")
-            lines.append(f"- **결정사항**: {self.decision or '-'}")
+            lines.append(f"- **조치계획**: {action_plan or '-'}")
+            lines.append(f"- **결정사항**: {decision or '-'}")
             lines.append("")
 
         # 관련 문서
@@ -569,6 +609,158 @@ def generate_project_context(records: List[Dict[str, Any]]) -> str:
 
 
 # ─── Issue Sync Logic ───────────────────────────────────────
+# ─── Data Quality Validation ───────────────────────────────
+_data_quality_warnings: List[str] = []
+
+
+def _validate_issue_completeness(issue: "Issue") -> tuple[List[str], bool]:
+    """high/critical 이슈에 owner/due_date 누락 시 경고 생성.
+
+    hard_gate_issues flag ON + CRITICAL + owner AND due_date 모두 누락 → 차단.
+    HIGH 이슈는 경고만 (기존과 동일).
+
+    Returns:
+        (경고 메시지 리스트, should_block: bool)
+    """
+    from scripts.telegram.config import is_enabled
+
+    warnings = []
+    should_block = False
+
+    if issue.priority not in ("high", "critical"):
+        return warnings, should_block
+
+    no_owner = not issue.owner or issue.owner.strip() == ""
+    no_due_date = not issue.due_date or issue.due_date.strip() == ""
+
+    if no_owner:
+        warnings.append(f"⚠️ {issue.issue_id} [{issue.priority}] 담당자(owner) 미지정")
+    if no_due_date:
+        warnings.append(
+            f"⚠️ {issue.issue_id} [{issue.priority}] 마감일(due_date) 미지정"
+        )
+
+    # Hard gate: CRITICAL + 양쪽 모두 누락 + flag ON → sync 차단
+    if (
+        is_enabled("hard_gate_issues")
+        and issue.priority == "critical"
+        and no_owner
+        and no_due_date
+    ):
+        warnings.append(
+            f"🚨 {issue.issue_id} [CRITICAL] owner+due_date 모두 누락 → sync 차단"
+        )
+        should_block = True
+
+    return warnings, should_block
+
+
+def generate_data_quality_report() -> Optional[Path]:
+    """ISSUES_DIR 전체 스캔 → 우선순위별 위반 집계 → 마크다운 보고서 생성.
+
+    Returns:
+        생성된 보고서 파일 경로, 또는 None
+    """
+    if not ISSUES_DIR.exists():
+        log.warning("이슈 디렉토리 없음 — 데이터 품질 보고서 생략")
+        return None
+
+    violations = {
+        "critical": {"no_owner": [], "no_due_date": []},
+        "high": {"no_owner": [], "no_due_date": []},
+    }
+    total_scanned = 0
+
+    for f in ISSUES_DIR.glob("SEN-*.md"):
+        fm = parse_frontmatter(f)
+        if not fm:
+            continue
+        total_scanned += 1
+
+        priority = fm.get("priority", "")
+        if priority not in ("high", "critical"):
+            continue
+
+        issue_id = fm.get("issue_id", f.stem)
+        status = fm.get("issue_status", "open")
+        # 이미 종료된 이슈는 스킵
+        if status in ("resolved", "closed"):
+            continue
+
+        owner = str(fm.get("owner", "")).strip()
+        if not owner or owner == "''":
+            violations[priority]["no_owner"].append(issue_id)
+
+        due = str(fm.get("due_date", "")).strip()
+        if not due or due == "''":
+            violations[priority]["no_due_date"].append(issue_id)
+
+    # 보고서 생성
+    today = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = [
+        "---",
+        f"title: 데이터 품질 보고서",
+        f"date: {datetime.now().strftime('%Y-%m-%d')}",
+        "tags: [project/p5, type/quality-report]",
+        "---",
+        "",
+        "# P5 데이터 품질 보고서",
+        f"> 생성: {today} | 스캔: {total_scanned}건",
+        "",
+        "## 필수 필드 누락 현황 (high/critical 이슈)",
+        "",
+        "| 우선순위 | 위반 유형 | 건수 | 이슈 목록 |",
+        "|----------|----------|------|-----------|",
+    ]
+
+    total_violations = 0
+    for priority in ("critical", "high"):
+        for field, label in [
+            ("no_owner", "담당자 미지정"),
+            ("no_due_date", "마감일 미지정"),
+        ]:
+            ids = violations[priority][field]
+            total_violations += len(ids)
+            id_str = ", ".join(ids[:10])
+            if len(ids) > 10:
+                id_str += f" 외 {len(ids) - 10}건"
+            lines.append(f"| {priority} | {label} | {len(ids)} | {id_str} |")
+
+    lines.extend(
+        [
+            "",
+            f"**총 위반: {total_violations}건**",
+            "",
+            "## 권고사항",
+            "",
+        ]
+    )
+
+    if total_violations == 0:
+        lines.append("✅ 모든 high/critical 이슈에 필수 필드가 채워져 있습니다.")
+    else:
+        lines.append("다음 조치를 권장합니다:")
+        lines.append("")
+        if any(violations[p]["no_owner"] for p in ("critical", "high")):
+            lines.append(
+                "1. **담당자 즉시 할당**: critical/high 이슈에 담당자를 배정하세요."
+            )
+        if any(violations[p]["no_due_date"] for p in ("critical", "high")):
+            lines.append(
+                "2. **마감일 설정**: critical/high 이슈에 마감일을 설정하세요."
+            )
+
+    lines.append("")
+
+    # 파일 저장
+    output_dir = VAULT_PATH / "P5-Project" / "00-Overview"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "데이터품질보고서.md"
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    log.info(f"데이터 품질 보고서 생성: {output_path} (위반 {total_violations}건)")
+    return output_path
+
+
 def parse_issue(
     record: Dict[str, Any], config: Optional[dict] = None
 ) -> Optional[Issue]:
@@ -620,7 +812,7 @@ def parse_issue(
         related_raw = str(mapped.get("related_docs", ""))
         related_docs = [d.strip() for d in related_raw.split(",") if d.strip()]
 
-        return Issue(
+        issue = Issue(
             issue_id=issue_id,
             title=title,
             issue_status=issue_status,
@@ -638,6 +830,19 @@ def parse_issue(
             action_plan=str(mapped.get("action_plan", "")).strip(),
             decision=str(mapped.get("decision", "")).strip(),
         )
+
+        # Data Gate: high/critical 필수 필드 검증 (soft gate + hard gate)
+        warnings, should_block = _validate_issue_completeness(issue)
+        if warnings:
+            _data_quality_warnings.extend(warnings)
+        if should_block:
+            log.warning(
+                "Hard gate 차단: %s (CRITICAL, owner+due_date 모두 누락)",
+                issue.issue_id,
+            )
+            return None
+
+        return issue
     except Exception as e:
         log.warning(f"이슈 파싱 실패: {e}")
         return None
@@ -786,19 +991,15 @@ def cmd_sync(args):
             log.warning(f"    - {err}")
     log.info("=" * 50)
 
+    # 데이터 품질 보고서 자동 생성
+    report_path = generate_data_quality_report()
+    if report_path:
+        log.info(f"📊 데이터 품질 보고서: {report_path}")
+
 
 def _parse_frontmatter(file_path: Path) -> dict:
     """파일에서 YAML frontmatter를 파싱하여 dict로 반환"""
-    try:
-        content = file_path.read_text(encoding="utf-8")
-        if not content.startswith("---"):
-            return {}
-        parts = content.split("---", 2)
-        if len(parts) < 3:
-            return {}
-        return yaml.safe_load(parts[1]) or {}
-    except Exception:
-        return {}
+    return parse_frontmatter(file_path)
 
 
 def classify_issue_tier(fm: dict, config: dict) -> str:
@@ -1061,13 +1262,7 @@ def cmd_setup(args):
 
 def load_config() -> dict:
     """설정 파일 로드"""
-    if CONFIG_PATH.exists():
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
-        except Exception:
-            pass
-    return {}
+    return load_yaml(CONFIG_PATH)
 
 
 # ─── Main ───────────────────────────────────────────────────
@@ -1500,13 +1695,7 @@ def cmd_context(args):
 
 def _load_config() -> dict:
     """p5-sync-config.yaml 로드"""
-    if CONFIG_PATH.exists():
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
-        except Exception:
-            pass
-    return {}
+    return load_yaml(CONFIG_PATH)
 
 
 def main():

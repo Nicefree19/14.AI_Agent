@@ -7,7 +7,7 @@ echo   P5 일일 루틴 - %date% %time:~0,5%
 echo ============================================================
 echo.
 
-cd /d "D:\00.Work_AI_Tool\14.AI_Agent"
+cd /d "%~dp0.."
 call .agent_venv\Scripts\activate.bat
 
 echo [0/9] 텔레그램 미처리 작업 확인...

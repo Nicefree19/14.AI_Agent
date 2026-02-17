@@ -12,8 +12,8 @@ from datetime import datetime
 import yaml
 
 # ─── 설정 ─────────────────────────────────────────────────
-VAULT_PATH = Path(r"D:\00.Work_AI_Tool\14.AI_Agent\ResearchVault")
-SCRIPTS_DIR = Path(r"D:\00.Work_AI_Tool\14.AI_Agent\scripts")
+SCRIPTS_DIR = Path(__file__).resolve().parent
+VAULT_PATH = SCRIPTS_DIR.parent / "ResearchVault"
 LOG_FILE = SCRIPTS_DIR / "research_cli.log"
 
 logging.basicConfig(

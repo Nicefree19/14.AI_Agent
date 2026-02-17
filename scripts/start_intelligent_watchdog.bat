@@ -12,7 +12,7 @@ echo   Ctrl+C로 종료
 echo ============================================================
 echo.
 
-cd /d "D:\00.Work_AI_Tool\14.AI_Agent"
+cd /d "%~dp0.."
 call .agent_venv\Scripts\activate.bat
 
 python scripts\intelligent_watchdog.py

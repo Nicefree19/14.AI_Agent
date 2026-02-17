@@ -12,6 +12,10 @@
 
 # Logs
 *.log
+logs/
+
+# Cleanup marker
+cleanup_last_run.txt
 
 # Misc
 nul

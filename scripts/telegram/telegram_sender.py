@@ -18,47 +18,11 @@
 
 import os
 import sys
-import importlib
 from pathlib import Path
 from dotenv import load_dotenv
 import asyncio
 
-
-def _get_bot_class():
-    """
-    python-telegram-bot의 Bot 클래스를 로드.
-    scripts/telegram/ 패키지가 서드파티 telegram 모듈을 가리는 문제를 우회.
-    """
-    _scripts_dir = str(Path(__file__).resolve().parent.parent)
-    _project_root = str(Path(__file__).resolve().parent.parent.parent)
-    _telegram_dir = str(Path(__file__).resolve().parent)
-
-    # 충돌 가능한 모든 경로를 임시 제거
-    conflict_dirs = {_scripts_dir, _project_root, _telegram_dir, os.getcwd()}
-    original_path = sys.path[:]
-    sys.path = [
-        p for p in sys.path if p not in conflict_dirs and not p.endswith("scripts")
-    ]
-    try:
-        # 캐시된 우리 패키지를 잠시 제거
-        our_telegram = sys.modules.pop("telegram", None)
-        our_sub_modules = {
-            k: v for k, v in sys.modules.items() if k.startswith("telegram.")
-        }
-        for k in our_sub_modules:
-            sys.modules.pop(k, None)
-        try:
-            tg = importlib.import_module("telegram")
-            return tg.Bot
-        finally:
-            # 우리 패키지를 복원
-            if our_telegram is not None:
-                sys.modules["telegram"] = our_telegram
-            for k, v in our_sub_modules.items():
-                sys.modules[k] = v
-    finally:
-        sys.path = original_path
-
+from ._compat import get_bot_class as _get_bot_class, get_input_file_class as _get_input_file_class
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 ENV_PATH = str(_PROJECT_ROOT / ".env")
@@ -67,6 +31,14 @@ ENV_PATH = str(_PROJECT_ROOT / ".env")
 load_dotenv(ENV_PATH)
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+# 마지막 전송 에러 정보 보존 (반환형 변경 없이 에러 전달)
+_last_send_error: str | None = None
+
+
+def get_last_send_error() -> str | None:
+    """마지막 send_message 실패 시 에러 메시지 반환."""
+    return _last_send_error
 
 
 async def send_message(chat_id, text, parse_mode="Markdown"):
@@ -106,6 +78,20 @@ async def send_message(chat_id, text, parse_mode="Markdown"):
         return True
 
     except Exception as e:
+        # Markdown 파싱 실패 시 plain text로 재시도
+        if parse_mode is not None:
+            try:
+                if len(text) > 4000:
+                    chunks = [text[i : i + 4000] for i in range(0, len(text), 4000)]
+                    for chunk in chunks:
+                        await bot.send_message(chat_id=chat_id, text=chunk)
+                else:
+                    await bot.send_message(chat_id=chat_id, text=text)
+                return True
+            except Exception as retry_err:
+                print(f"❌ plain text 재시도도 실패: {retry_err}")
+        global _last_send_error
+        _last_send_error = str(e)
         print(f"❌ 메시지 전송 실패: {e}")
         return False
 
@@ -144,12 +130,14 @@ async def send_file(chat_id, file_path, caption=None):
             return False
 
         with open(file_path, "rb") as f:
-            await bot.send_document(
-                chat_id=chat_id,
-                document=f,
-                caption=caption,
-                filename=os.path.basename(file_path),
-            )
+            file_bytes = f.read()
+        InputFile = _get_input_file_class()
+        input_file = InputFile(file_bytes, filename=os.path.basename(file_path))
+        await bot.send_document(
+            chat_id=chat_id,
+            document=input_file,
+            caption=caption,
+        )
 
         return True
 
@@ -213,28 +201,44 @@ def run_async_safe(coro):
 
 
 # 동기 함수 래퍼
+import time as _time
+
+_SIDE_EFFECT_INTERVAL = 30  # seconds — 무거운 사이드이펙트 쓰로틀
+_last_side_effect_ts: float = 0.0
+
+
 def send_message_sync(chat_id, text, parse_mode="Markdown"):
     """
     동기 방식 메시지 전송
 
     메시지 전송 시마다:
-    1. working.json의 last_activity 갱신
-    2. 새 메시지 확인 및 저장 (작업 중일 때만)
+    1. working.json의 last_activity 갱신 (항상)
+    2. 봇 응답 기록 + 새 메시지 확인 (30초 쓰로틀)
     """
+    global _last_side_effect_ts
     result = run_async_safe(send_message(chat_id, text, parse_mode))
 
-    # 메시지 전송 성공 시
-    if result:
-        try:
-            from .telegram_bot import (
-                update_working_activity,
-                check_new_messages_during_work,
-                save_new_instructions,
-                save_bot_response,
-                check_working_lock,
-            )
+    if not result:
+        return result
 
-            # 0. 봇 응답 기록 (대화 컨텍스트 유지)
+    try:
+        from .telegram_bot import (
+            update_working_activity,
+            check_new_messages_during_work,
+            save_new_instructions,
+            save_bot_response,
+            check_working_lock,
+        )
+
+        # 항상: 활동 시각 갱신 (경량: 1읽기 + 1쓰기, 스탈 감지 필수)
+        update_working_activity()
+
+        # 30초 쓰로틀: 무거운 작업 (봇 응답 기록 + 새 메시지 감지)
+        now = _time.time()
+        if now - _last_side_effect_ts >= _SIDE_EFFECT_INTERVAL:
+            _last_side_effect_ts = now
+
+            # 봇 응답 기록 (대화 컨텍스트 유지)
             lock_info = check_working_lock()
             if lock_info:
                 reply_ids = lock_info.get("message_id", [])
@@ -243,27 +247,24 @@ def send_message_sync(chat_id, text, parse_mode="Markdown"):
                 if reply_ids:
                     save_bot_response(chat_id, text[:500], reply_ids)
 
-            # 1. 활동 시각 갱신
-            update_working_activity()
-
-            # 2. 🆕 새 메시지 확인
+            # 새 메시지 감지
             new_msgs = check_new_messages_during_work()
             if new_msgs:
-                # 파일에 저장
                 save_new_instructions(new_msgs)
 
-                # 알림 전송
                 alert_text = f"✅ **새로운 요청 {len(new_msgs)}개 확인**\n\n"
                 for i, msg in enumerate(new_msgs, 1):
                     alert_text += f"{i}. {msg['instruction'][:50]}...\n"
                 alert_text += "\n진행 중인 작업에 반영하겠습니다."
 
-                # 재귀 호출 방지 (알림은 활동 갱신만 하고 새 메시지 확인 안 함)
+                # 재귀 호출 방지 (알림은 raw send만)
                 run_async_safe(send_message(chat_id, alert_text, parse_mode))
 
-        except Exception as e:
-            # 갱신 실패해도 메시지 전송 결과에는 영향 없음
-            pass
+    except ImportError:
+        pass  # telegram_bot not available (standalone usage)
+    except Exception as e:
+        # Side-effect failure must not mask the send result, but log it
+        print(f"⚠️ send_message_sync 사이드이펙트 오류: {e}")
 
     return result
 

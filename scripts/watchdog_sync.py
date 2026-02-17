@@ -15,16 +15,21 @@ import yaml
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+# ─── sys.path 보정 (bare import 호환) ──────────────────────
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
 # ─── 설정 로드 ────────────────────────────────────────────
-SCRIPT_DIR = Path(__file__).parent
-CONFIG_PATH = Path(r"D:\00.Work_AI_Tool\14.AI_Agent\ResearchVault\_config\sync-config.yaml")
+from p5_config import SCRIPT_DIR, CONFIG_DIR, VAULT_PATH
+CONFIG_PATH = CONFIG_DIR / "sync-config.yaml"
 
 def load_config():
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             return yaml.safe_load(f)
     return {
-        "watch_path": r"D:\00.Work_AI_Tool\14.AI_Agent\ResearchVault",
+        "watch_path": str(VAULT_PATH),
         "file_patterns": ["*.md"],
         "ignore_patterns": [".obsidian/*", ".trash/*", "_config/*"],
         "debounce_seconds": 2,

@@ -17,6 +17,7 @@ import os
 import traceback
 from typing import Any, Callable, Dict, List
 
+from .config import is_enabled
 from .telegram_bot import (
     check_telegram,
     combine_tasks,
@@ -26,6 +27,7 @@ from .telegram_bot import (
     report_telegram,
     mark_done_telegram,
     load_memory,
+    load_memory_for_task,
     get_task_dir,
 )
 from .telegram_sender import send_message_sync
@@ -47,6 +49,7 @@ def run_telegram_task_once(
     *,
     send_auto_progress: bool = True,
     mark_done_on_error: bool = False,
+    pending_tasks: list | None = None,
 ) -> bool:
     """
     대기 중인 텔레그램 작업을 1회 처리한다.
@@ -67,7 +70,7 @@ def run_telegram_task_once(
             - True: 작업 처리 완료
             - False: 대기 작업 없음, 잠금 실패, 혹은 실행 오류
     """
-    pending = check_telegram()
+    pending = pending_tasks if pending_tasks is not None else check_telegram()
     if not pending:
         return False
 
@@ -95,7 +98,7 @@ def run_telegram_task_once(
             message_ids,
         )
 
-        memories = load_memory()
+        memories = load_memory_for_task(combined_instruction, limit=5)
         task_dir = get_task_dir(message_ids[0])
         os.chdir(task_dir)
 
@@ -126,7 +129,7 @@ def run_telegram_task_once(
         if send_auto_progress:
             send_progress("📊 결과 정리 및 전송 중...")
 
-        report_telegram(
+        send_ok = report_telegram(
             combined_instruction,
             result_text,
             chat_id,
@@ -134,10 +137,26 @@ def run_telegram_task_once(
             message_ids,
             files=files,
         )
-        mark_done_telegram(message_ids)
+        if send_ok:
+            mark_done_telegram(message_ids)
+        else:
+            from .telegram_sender import get_last_send_error
+            err = get_last_send_error() or "unknown"
+            print(f"⚠️ 전송 실패 ({err}), mark_done 생략 — 다음 주기에 재시도")
         return True
 
     except Exception as exc:  # noqa: BLE001
+        # 에러 분류 통합
+        try:
+            from .error_handler import classify_error, handle_error
+            severity, category = classify_error(exc)
+            handle_error(exc, severity, category, context={
+                "message_ids": str(message_ids),
+                "instruction": combined_instruction[:100],
+            })
+        except Exception:
+            pass  # 에러 분류 자체 실패가 본 흐름을 방해하지 않음
+
         short_error = f"{type(exc).__name__}: {exc}"
         send_message_sync(
             chat_id,
@@ -162,6 +181,32 @@ def run_telegram_task_once(
     finally:
         os.chdir(previous_cwd)
         remove_working_lock()
+
+        # W6: 작업 완료 후 건강 점검 (성공/실패 무관)
+        if is_enabled("proactive_alerts"):
+            try:
+                from .health_monitor import (
+                    run_health_check,
+                    format_alert_message,
+                    should_send_alert,
+                    mark_alert_sent,
+                )
+
+                report = run_health_check()
+                if not report["healthy"] and should_send_alert():
+                    has_critical = any(
+                        c["status"] == "critical" for c in report["checks"]
+                    )
+                    if has_critical:
+                        alert_msg = format_alert_message(report)
+                        send_message_sync(chat_id, alert_msg)
+                        mark_alert_sent()
+                    else:
+                        from .logger import get_logger
+                        _hlog = get_logger("health_monitor")
+                        _hlog.warning("건강 점검 경고: %s", report["summary"])
+            except Exception:
+                pass  # 건강 점검 실패가 본 흐름을 방해하지 않음
 
 
 if __name__ == "__main__":
