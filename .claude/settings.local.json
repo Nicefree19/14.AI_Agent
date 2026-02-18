@@ -142,7 +142,17 @@
       "Bash(D:)",
       "Bash(git status:*)",
       "Bash(C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe -m pytest:*)",
-      "Bash(cmd /c \"cd /d D:\\\\00.Work_AI_Tool\\\\14.AI_Agent && C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe -m pytest tests\\\\test_health_monitor.py -v 2>&1\")"
+      "Bash(cmd /c \"cd /d D:\\\\00.Work_AI_Tool\\\\14.AI_Agent && C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe -m pytest tests\\\\test_health_monitor.py -v 2>&1\")",
+      "Bash(gh repo view:*)",
+      "Bash(gh auth:*)",
+      "Bash(gh repo create:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)",
+      "Bash(git fetch:*)",
+      "Bash(gh api:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(gh pr create:*)",
+      "Bash(git checkout:*)"
     ]
   }
 }

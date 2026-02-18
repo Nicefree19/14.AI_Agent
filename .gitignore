@@ -39,3 +39,12 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Test artifacts
+*_output.txt
+test_result.txt
+verify_w1*.py
+*.log.bak
+
+# Debug scripts
+scripts/debug_*.py

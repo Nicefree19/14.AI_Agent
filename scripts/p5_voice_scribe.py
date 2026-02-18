@@ -1,5 +1,5 @@
 """
-P5 Voice Scribe (Gemini 1.5 Pro Powered)
+P5 Voice Scribe (Gemini 3.0 Flash Preview Powered)
 ----------------------------------------
 Two-Track System for processing STT transcripts from Naver Clova Note / T-Lo.
 
@@ -15,14 +15,10 @@ Usage:
 import os
 import sys
 import time
-import json
 import yaml
-import re
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Optional
-
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
@@ -51,15 +47,9 @@ INBOX_DIR.mkdir(parents=True, exist_ok=True)
 MEETING_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# ─── Gemini API Wrapper (Placeholder) ───────────────────────
-# 실제 API 연동을 위해서는 google-generativeai 패키지가 필요합니다.
-# 현재 환경에서는 Mock 또는 실제 구현을 선택해야 합니다.
-# 여기서는 실제 구현을 위한 구조를 잡습니다.
-
+# ─── Gemini API Wrapper ─────────────────────────────────────
 try:
     import google.generativeai as genai
-
-    # API KEY는 환경변수 또는 .env에서 로드
     from dotenv import load_dotenv
 
     load_dotenv(PROJECT_ROOT / ".env")
@@ -74,9 +64,9 @@ except ImportError:
 
 
 class ExternalModel:
-    """Gemini 1.5 Pro Interface"""
+    """Gemini Interface"""
 
-    def __init__(self, model_name="gemini-1.5-pro-latest"):
+    def __init__(self, model_name="gemini-3-flash-preview"):
         self.model = genai.GenerativeModel(model_name)
 
     def generate(self, prompt: str) -> str:
@@ -112,7 +102,6 @@ def load_active_issues() -> str:
             try:
                 content = f.read_text(encoding="utf-8", errors="ignore")
                 if "priority: critical" in content or "priority: high" in content:
-                    # YAML parsing simplified
                     lines = content.splitlines()
                     title = "Untitled"
                     issue_id = f.stem
@@ -216,12 +205,23 @@ def process_file(file_path: Path):
     )
 
     # 4. Process with Gemini
-    gemini = ExternalModel("gemini-1.5-pro-latest")
+    # User requested 3.0 Flash (Preview)
+    gemini = ExternalModel("gemini-3-flash-preview")
     result = gemini.generate(prompt)
 
     if not result:
         log.error("Empty response from Gemini.")
-        return
+        try:
+            # Fallback to 2.0 Flash if 3.0 fails/quota issues
+            log.info("Retrying with gemini-2.0-flash...")
+            gemini = ExternalModel("gemini-2.0-flash")
+            result = gemini.generate(prompt)
+        except Exception:
+            pass
+
+        if not result:
+            log.error("Empty response from Gemini (Fallback also failed).")
+            return
 
     # 5. Save Output
     output_filename = (
@@ -234,6 +234,7 @@ title: "{mode} 요약: {file_path.stem}"
 date: {datetime.now().strftime('%Y-%m-%d')}
 tags: [type/{'call' if 'Call' in mode else 'meeting'}]
 original_file: {file_path.name}
+model: gemini-3-flash-preview
 ---
 
 # 📝 {mode} 분석 결과
@@ -247,38 +248,155 @@ original_file: {file_path.name}
     try:
         if "SECTION 7: TELEGRAM_SEND_TEXT" in result:
             parts = result.split("SECTION 7: TELEGRAM_SEND_TEXT")[1]
-            # Next section split
             if "SECTION 8" in parts:
                 msg_body = parts.split("SECTION 8")[0].strip()
             else:
                 msg_body = parts.strip()
 
-            send_telegram_alert(f"🎙️ **{mode} 분석 완료**\n\n{msg_body}")
+            send_telegram_alert(f"🎙️ **{mode} 분석 완료** (v3.0)\n\n{msg_body}")
     except Exception as e:
         log.error(f"Failed to send Telegram: {e}")
 
-    # 7. Move processed file to Archive (Optional)
-    # processed_dir = INBOX_DIR / "Processed"
-    # processed_dir.mkdir(exist_ok=True)
-    # file_path.rename(processed_dir / file_path.name)
-
 
 def send_telegram_alert(message: str):
-    """Call external telegram script or API"""
-    # Assuming scripts/telegram/telegram_sender.py exists or similar
-    # For now, we'll implement a simple subprocess call if needed,
-    # but strictly speaking we should reuse existing tools.
-    # Here we will just log it as the user didn't ask for full implementation yet.
-    log.info(f"[TELEGRAM] {message}")
-
-    # Try using the existing telegram_sender if available
+    """Call external telegram script"""
     try:
-        sys.path.append(str(SCRIPT_DIR / "telegram"))
-        from telegram_sender import send_message
+        # 1. Add scripts/telegram to sys.path explicitly to find telegram_sender.py
+        #    This covers the case where it's a script, not formatted as package
+        telegram_script_dir = SCRIPT_DIR / "telegram"
+        if str(telegram_script_dir) not in sys.path:
+            sys.path.append(str(telegram_script_dir))
 
-        send_message(message)
-    except ImportError:
-        pass
+        try:
+            from telegram_sender import send_message_sync
+        except ImportError:
+            # 2. Try importing as package if running from project root
+            #    project_root/scripts/telegram
+            #    We need 'scripts' in path to do 'from telegram import ...'
+            if str(SCRIPT_DIR) not in sys.path:
+                sys.path.append(str(SCRIPT_DIR))
+            from telegram.telegram_sender import send_message_sync
+
+        # Load ID
+        from dotenv import load_dotenv
+
+        load_dotenv(PROJECT_ROOT / ".env")
+
+        chat_id_str = os.getenv("TELEGRAM_ALLOWED_USERS")
+        if chat_id_str:
+            chat_ids = chat_id_str.split(",")
+            # Broadcast to all allowed users or just the first?
+            # Typically user expects personal notification. Let's send to first for now.
+            target_id = int(chat_ids[0].strip())
+
+            log.info(f"Sending Telegram to {target_id}...")
+            send_message_sync(target_id, message)
+        else:
+            log.warning("No TELEGRAM_ALLOWED_USERS found in .env")
+
+    except Exception as e:
+        log.error(f"Failed to send Telegram: {e}")
+
+
+# ─── Watchdog Handler ───────────────────────────────────────
+
+
+# ─── Telegram Relay ─────────────────────────────────────────
+
+
+class TelegramRelay:
+    """
+    Monitors telegram_messages.json and copies relevant files to Inbox/Clova.
+    This bridges the gap between 'Sending to Bot' and 'Voice Scribe Processing'.
+    """
+
+    def __init__(self):
+        self.messages_file = PROJECT_ROOT / "telegram_data" / "telegram_messages.json"
+        self.state_file = SCRIPT_DIR / "voice_scribe_state.json"
+        self.last_id = self.load_state()
+        self.running = False
+
+    def load_state(self) -> int:
+        if self.state_file.exists():
+            try:
+                data = json.loads(self.state_file.read_text(encoding="utf-8"))
+                return data.get("last_processed_id", 0)
+            except Exception:
+                return 0
+        return 0
+
+    def save_state(self, last_id: int):
+        self.state_file.write_text(
+            json.dumps({"last_processed_id": last_id}), encoding="utf-8"
+        )
+
+    def run(self):
+        self.running = True
+        log.info("🚀 Telegram Relay started...")
+        while self.running:
+            try:
+                self.check_new_messages()
+            except Exception as e:
+                log.error(f"Relay Error: {e}")
+            time.sleep(5)  # Poll every 5 seconds
+
+    def check_new_messages(self):
+        if not self.messages_file.exists():
+            return
+
+        try:
+            data = json.loads(self.messages_file.read_text(encoding="utf-8"))
+        except Exception:
+            return
+
+        messages = data.get("messages", [])
+        max_id = self.last_id
+
+        for msg in messages:
+            msg_id = msg.get("message_id", 0)
+            if msg_id <= self.last_id:
+                continue
+
+            # Check if message has relevant files
+            if "files" in msg and msg["files"]:
+                for file_info in msg["files"]:
+                    file_path = Path(file_info.get("path", ""))
+                    if not file_path.exists():
+                        continue
+
+                    # Filter extensions
+                    if file_path.suffix.lower() in [
+                        ".txt",
+                        ".md",
+                        ".m4a",
+                        ".mp3",
+                        ".wav",
+                    ]:
+                        self.copy_to_inbox(file_path, msg)
+
+            max_id = max(max_id, msg_id)
+
+        if max_id > self.last_id:
+            self.last_id = max_id
+            self.save_state(self.last_id)
+
+    def copy_to_inbox(self, src: Path, msg: dict):
+        # Create a friendly filename: Telegram_[Date]_[User]_[OriginalName]
+        date_str = msg.get("timestamp", "").split(" ")[0].replace("-", "")
+        user_name = msg.get("first_name", "User")
+        new_name = f"Telegram_{date_str}_{user_name}_{src.name}"
+
+        dest = INBOX_DIR / new_name
+
+        try:
+            # Copy file
+            dest.write_bytes(src.read_bytes())
+            log.info(f"📥 Relayed from Telegram: {dest.name}")
+        except Exception as e:
+            log.error(f"Failed to copy file {src}: {e}")
+
+    def stop(self):
+        self.running = False
 
 
 # ─── Watchdog Handler ───────────────────────────────────────
@@ -296,18 +414,27 @@ class VoiceInboxHandler(FileSystemEventHandler):
             process_file(Path(event.src_path))
 
 
-def start_watchdog():
+def start_service():
+    # 1. Start Watchdog
     observer = Observer()
     event_handler = VoiceInboxHandler()
     observer.schedule(event_handler, str(INBOX_DIR), recursive=False)
     observer.start()
     log.info(f"👀 Watching {INBOX_DIR} for Voice Transcripts...")
 
+    # 2. Start Telegram Relay (in separate thread)
+    import threading
+
+    relay = TelegramRelay()
+    relay_thread = threading.Thread(target=relay.run, daemon=True)
+    relay_thread.start()
+
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         observer.stop()
+        relay.stop()
     observer.join()
 
 
@@ -320,5 +447,5 @@ if __name__ == "__main__":
         else:
             print(f"File not found: {fpath}")
     else:
-        # Otherwise start watchdog
-        start_watchdog()
+        # Otherwise start service (Watchdog + Relay)
+        start_service()
