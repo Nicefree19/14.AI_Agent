@@ -27,6 +27,9 @@ telegram_data/
 # Lock files
 *.lock
 
+# Hook runtime state
+.claude/hooks/session_state.json
+
 # Python
 __pycache__/
 *.py[cod]
