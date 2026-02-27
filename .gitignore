@@ -12,6 +12,10 @@
 
 # Logs
 *.log
+logs/
+
+# Cleanup marker
+cleanup_last_run.txt
 
 # Misc
 nul
@@ -22,6 +26,9 @@ telegram_data/
 
 # Lock files
 *.lock
+
+# Hook runtime state
+.claude/hooks/session_state.json
 
 # Python
 __pycache__/
@@ -35,3 +42,12 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Test artifacts
+*_output.txt
+test_result.txt
+verify_w1*.py
+*.log.bak
+
+# Debug scripts
+scripts/debug_*.py

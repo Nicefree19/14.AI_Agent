@@ -1,0 +1,171 @@
+# P5 복합동 골조 선제작(RISK 발주) 물량 데이터
+# 출처: SEN-689, SEN-697, SEN-707, SEN-709, SEN-713, SEN-714
+# 최종 업데이트: 2026-02-15
+
+metadata:
+  project: P5 복합동
+  subject: 골조 선제작(RISK 발주) 물량 검토
+  last_updated: "2026-02-15"
+  source_issues:
+    - SEN-689
+    - SEN-697
+    - SEN-707
+    - SEN-709
+    - SEN-713
+    - SEN-714
+  source_orgs:
+    - ENA(시공)
+    - 이앤디몰(PC)
+    - 센구조/자체발견
+
+# ─── CASE별 물량 비교 ─────────────────────────────────
+cases:
+  case_1:
+    description: "6F~8F 선제작 RISK 발주"
+    floor_range: "6F~8F"
+    quantities:
+      pc_total:
+        increase_m3: 6512
+        increase_pct: 7
+        note: "PC 물량 증가"
+    source_issue: SEN-713
+
+  case_2:
+    description: "6F~10F 선제작 RISK 발주 (5~10층 전층)"
+    floor_range: "6F~10F"
+    quantities:
+      psrc_steel:
+        increase_ton: 1904
+        increase_pct: 5
+        note: "PSRC 철골 증가"
+      cast_in_place:
+        increase_m3: 3808
+        increase_pct: 6
+        note: "현장타설 콘크리트 증가"
+      pc_total:
+        increase_m3: 11035
+        increase_pct: 12
+        note: "PC 전체 물량 증가"
+      pc_beam_girder:
+        increase_pct_max: 16
+        note: "PC 보/거더 물량 최대 증가율 (단차 레이아웃 미확정 상태)"
+    source_issues:
+      - SEN-714
+      - SEN-707
+      - SEN-709
+
+# ─── 부재별 상세 물량 ─────────────────────────────────
+components:
+  psrc:
+    name: "PSRC 기둥"
+    description: "프리스트레스트 강합성 기둥"
+    base_quantities:
+      note: "기존 설계 대비 물량 데이터 (SEN-697 참조)"
+    risk_impact:
+      steel_increase_ton: 1904
+      steel_increase_pct: 5
+      affected_zones: "5층~10층"
+    action_required: "RISK 발주 확정 시 PSRC 상세도 수정 필요"
+
+  hmb:
+    name: "HMB 브라켓"
+    description: "하이브리드 모멘트 브라켓"
+    base_quantities:
+      note: "PSRC 기둥 및 HMB 브라켓 물량 비교 자료 (SEN-697)"
+    risk_impact:
+      review_required: true
+      note: "PC 단차 발생 구간 임베드/브라켓 간섭 검토 필요"
+    action_required: "HMB 표준 상세도 작성 및 레벨 간섭 검토"
+
+  pc_girder:
+    name: "PC 거더/보"
+    description: "프리캐스트 콘크리트 보/거더"
+    risk_impact:
+      increase_pct_max: 16
+      note: "단차 레이아웃 미확정으로 최대 16% 증가 가능"
+    action_required: "이앤디몰 PC 단차 계획과 HMB 레벨 간섭 재검토"
+
+  pc_total:
+    name: "PC 전체"
+    description: "프리캐스트 콘크리트 전체 (기둥+보+슬라브+벽체)"
+    risk_impact:
+      case_1_increase_m3: 6512
+      case_1_increase_pct: 7
+      case_2_increase_m3: 11035
+      case_2_increase_pct: 12
+
+  cast_in_place:
+    name: "현장타설 콘크리트"
+    description: "현장 타설 콘크리트"
+    risk_impact:
+      increase_m3: 3808
+      increase_pct: 6
+
+# ─── 관련 이슈 상세 ─────────────────────────────────
+issues:
+  SEN-689:
+    title: "공기 단축 및 효율화를 위한 골조 선제작(Risk 발주) 추진에 따른 PSRC 및 HMB 설계/제작 기준 수립 요청"
+    zone: "P5 복합동 전구역"
+    source: "ENA(시공)"
+    key_point: "PC 보거더 물량 약 16% 증가 예상, 선제작 기준 검토"
+    action: "Risk 발주 대비 PSRC-HMB 표준 제작 기준안 작성"
+    created: "2026-02-10"
+
+  SEN-697:
+    title: "P5 복합동 PSRC 및 HMB 공법 적용 구간의 설계 변경에 따른 물량 산출 결과 및 비교 자료 송부"
+    zone: "미지정"
+    source: "센구조/자체발견"
+    key_point: "PSRC 기둥 및 HMB 브라켓 기존 대비 변경 물량 데이터 일체"
+    action: "시공사(ENA)와 자재 정산 협의 및 Shop 도면 반영 여부 검토"
+    created: "2026-02-10"
+
+  SEN-707:
+    title: "공기 단축을 위한 골조 선제작(RISK 발주) 검토에 따른 PC 물량 증가 확인"
+    zone: "6F~10F 바닥"
+    source: "이앤디몰(PC)"
+    key_point: "CASE 2 적용 시 PC 물량 11,035M3(12%) 증가, PC 보거더 최대 16%"
+    action: "HMB 및 PSRC 설계/제작 기준 수립, PC 단차와 HMB 레벨 간섭 재검토"
+    created: "2026-02-11"
+
+  SEN-709:
+    title: "P5 복합동 효율화 안 반영에 따른 골조 선제작(RISK 발주) 물량 검토"
+    zone: "6F~10F 전층"
+    source: "ENA(시공)"
+    key_point: "PC 물량 최대 11,035 M3(12%) 증가 예상"
+    action: "RISK 발주 방식에 따른 PSRC/HMB 설계 및 제작 기준 수립"
+    created: "2026-02-11"
+
+  SEN-713:
+    title: "골조 효율화를 위한 선제작(RISK 발주) 방식 도입 시 층별 PC 물량 증가량 검토"
+    zone: "6F~10F"
+    source: "이앤디몰(PC)"
+    key_point: "CASE 1(6-8F) 6,512M3(7%), CASE 2(6-10F) 11,035M3(12%)"
+    action: "HMB 표준 상세도 작성 및 PC 거더 단차 구간 임베드/브라켓 간섭 검토"
+    created: "2026-02-11"
+
+  SEN-714:
+    title: "P5 복합동 효율화 및 선제작(RISK 발주) 안 적용에 따른 PSRC 및 PC 물량 증가분 확인 보고"
+    zone: "5층~10층"
+    source: "ENA(시공)"
+    key_point: "PSRC 철골 1,904ton(5%), 현장타설 3,808m3(6%), PC 11,035m3(12%) 증가"
+    action: "증량 물량 맞춰 PSRC/HMB 상세도 수정 및 PC사 접합부 인터페이스 확인"
+    created: "2026-02-11"
+
+# ─── 변경점 요약 ─────────────────────────────────
+change_summary:
+  trigger: "P5 복합동 효율화 + 공기 단축을 위한 골조 선제작(RISK 발주) 방식 도입"
+  decision_status: "검토 중 (확정 전)"
+  key_changes:
+    - "6F~10F 구간 PC 부재 선제작으로 공기 단축"
+    - "선제작에 따른 PSRC 철골/현장타설/PC 물량 증가"
+    - "PC 단차 레이아웃 미확정 상태에서 HMB 간섭 검토 필요"
+  risks:
+    - "PC 보거더 물량 최대 16% 추가 증가 가능성"
+    - "PSRC-HMB 접합부 인터페이스 재설계 필요"
+    - "이앤디몰(PC) 단차 계획과 브라켓 레벨 간섭"
+    - "RISK 발주 확정 시 물량 확정 전 제작 돌입 리스크"
+  pending_actions:
+    - "PSRC/HMB 선제작 대응 표준 제작 기준안 수립"
+    - "PC사(이앤디몰)와 접합 임베드 상세 협의"
+    - "물량 확정 후 PSRC 및 HMB 상세도 수정"
+    - "자재 정산 협의 (ENA)"

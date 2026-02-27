@@ -1,0 +1,54 @@
+---
+issue_id: SEN-425
+title: 시공사 요청에 따른 PSRC 기둥의 Embedded Plate 수정/삭제 건이 제작 완료 구간(39~51열)에서 수용 불가함.
+issue_status: open
+owner: ''
+due_date: ''
+priority: high
+category: psrc
+zone: 1F 29~62열 (PSRC 기둥)
+source_origin: ENA(시공)
+action_plan: 잔존하는 Embedded Plate(39~51열)가 현장 설치 공종(파이프랙/전기)에 미치는 간섭 여부를 ENA와 협의하고
+  현장 대응 방안 결정 필요.
+decision: ''
+created_at: 2026. 1. 15 오후 4:57:42
+updated_at: ''
+source_file: ''
+last_synced_at: '2026-02-07T01:35:05.853032'
+tags:
+- project/p5
+- type/issue
+- status/open
+- priority/high
+- category/psrc
+---
+
+# 시공사 요청에 따른 PSRC 기둥의 Embedded Plate 수정/삭제 건이 제작 완료 구간(39~51열)에서 수용 불가함.
+
+## 📋 기본 정보
+
+| 항목 | 내용 |
+|------|------|
+| **이슈 ID** | `SEN-425` |
+| **상태** | 🔴 열림 |
+| **담당자** | - |
+| **마감일** | - |
+| **우선순위** | 🔴 높음 |
+| **카테고리** | psrc |
+| **위치(Zone)** | 1F 29~62열 (PSRC 기둥) |
+| **발생원** | ENA(시공) |
+
+## 📝 설명
+
+GRID 39~51 구간은 제작 완료로 수정 및 삭제 불가. GRID 29~38, 52~62 구간은 수정은 불가하나 삭제는 가능함.
+
+## 📌 조치 및 결정
+
+- **조치계획**: 잔존하는 Embedded Plate(39~51열)가 현장 설치 공종(파이프랙/전기)에 미치는 간섭 여부를 ENA와 협의하고 현장 대응 방안 결정 필요.
+- **결정사항**: -
+
+## 📅 히스토리
+
+- 생성: 2026. 1. 15 오후 4:57:42
+- 수정: -
+- 동기화: 2026-02-07T01:35:05.853032

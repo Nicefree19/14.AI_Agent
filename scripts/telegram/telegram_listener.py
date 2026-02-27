@@ -16,51 +16,16 @@ import os
 import sys
 import json
 import time
-import importlib
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 import asyncio
 
+from ._compat import get_bot_class as _get_bot_class
+from .config import TELEGRAM_DATA_DIR, MESSAGES_FILE as _MESSAGES_FILE_PATH
 
-def _get_bot_class():
-    """
-    python-telegram-bot의 Bot 클래스를 로드.
-    scripts/telegram/ 패키지가 서드파티 telegram 모듈을 가리는 문제를 우회.
-    """
-    _scripts_dir = str(Path(__file__).resolve().parent.parent)
-    _project_root = str(Path(__file__).resolve().parent.parent.parent)
-    _telegram_dir = str(Path(__file__).resolve().parent)
-
-    # 충돌 가능한 모든 경로를 임시 제거
-    conflict_dirs = {_scripts_dir, _project_root, _telegram_dir, os.getcwd()}
-    original_path = sys.path[:]
-    sys.path = [
-        p for p in sys.path if p not in conflict_dirs and not p.endswith("scripts")
-    ]
-    try:
-        # 캐시된 우리 패키지를 잠시 제거
-        our_telegram = sys.modules.pop("telegram", None)
-        our_sub_modules = {
-            k: v for k, v in sys.modules.items() if k.startswith("telegram.")
-        }
-        for k in our_sub_modules:
-            sys.modules.pop(k, None)
-        try:
-            tg = importlib.import_module("telegram")
-            return tg.Bot
-        finally:
-            # 우리 패키지를 복원
-            if our_telegram is not None:
-                sys.modules["telegram"] = our_telegram
-            for k, v in our_sub_modules.items():
-                sys.modules[k] = v
-    finally:
-        sys.path = original_path
-
-
-_BASE_DIR = str(Path(__file__).resolve().parent.parent.parent / "telegram_data")
-MESSAGES_FILE = os.path.join(_BASE_DIR, "telegram_messages.json")
+_BASE_DIR = str(TELEGRAM_DATA_DIR)
+MESSAGES_FILE = str(_MESSAGES_FILE_PATH)
 LISTENER_PID_FILE = os.path.join(_BASE_DIR, "listener.pid")
 ENV_PATH = str(Path(__file__).resolve().parent.parent.parent / ".env")
 
@@ -129,9 +94,13 @@ def load_messages():
 
 
 def save_messages(data):
-    """메시지 저장"""
-    with open(MESSAGES_FILE, "w", encoding="utf-8") as f:
+    """메시지 저장 (원자적 쓰기 — 크래시 안전)"""
+    tmp = MESSAGES_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, MESSAGES_FILE)
 
 
 async def download_file(bot, file_id, message_id, file_type, file_name=None):
@@ -374,7 +343,9 @@ async def fetch_new_messages():
         return 0
 
     except Exception as e:
-        print(f"❌ 오류: {e}")
+        import traceback
+        print(f"❌ 메시지 수신 오류: {e}")
+        traceback.print_exc()
         return None
 
 

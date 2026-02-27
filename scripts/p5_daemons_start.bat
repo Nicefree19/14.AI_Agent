@@ -7,7 +7,7 @@ echo   P5 Background Daemons - Starting All
 echo ============================================================
 echo.
 
-cd /d "D:\00.Work_AI_Tool\14.AI_Agent"
+cd /d "%~dp0.."
 
 echo [1/3] Message Daemon (Email + Auto-Triage)...
 start "P5-MessageDaemon" cmd /k "chcp 65001 >nul && set PYTHONIOENCODING=utf-8 && call .agent_venv\Scripts\activate.bat && python scripts\message_daemon.py start"

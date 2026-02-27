@@ -70,39 +70,51 @@ def _load_config() -> dict:
 
 # ─── Metric Calculators ────────────────────────────────────
 def calc_snr() -> Dict:
-    """1. 신호대잡음비 — 이메일 중 유효 처리 비율"""
-    total = 0
+    """1. 신호대잡음비 — SEN 이슈 classification 필드 기반.
+
+    signal = Action + Decision, noise = Reference + Trash.
+    classification 데이터 없으면 N/A 반환.
+    """
+    signal = 0
     noise = 0
+    total = 0
 
-    # 최근 이메일 파일 분석 (간접 측정)
-    if INBOX_DIR.exists():
-        total = len(list(INBOX_DIR.glob("*.md")))
+    if ISSUES_DIR.exists():
+        for f in ISSUES_DIR.glob("SEN-*.md"):
+            fm = _parse_frontmatter(f)
+            cls = fm.get("classification", "")
+            if not cls:
+                continue
+            total += 1
+            if cls in ("Action", "Decision"):
+                signal += 1
+            elif cls in ("Reference", "Trash"):
+                noise += 1
 
-    # 트리아지 로그에서 필터링 비율 추정
-    # (실제로는 process 실행 시 기록됨, 여기서는 이메일 파일 기반 추정)
-    # 노이즈 키워드로 간접 판단
-    noise_indicators = ["linkedin", "noreply", "용인단지", "우리들교회", "리마건축"]
-    if INBOX_DIR.exists():
-        for f in INBOX_DIR.glob("*.md"):
-            try:
-                content = f.read_text(encoding="utf-8", errors="replace")[:500].lower()
-                if any(kw.lower() in content for kw in noise_indicators):
-                    noise += 1
-            except Exception:
-                pass
+    if total == 0:
+        return {
+            "name": "신호대잡음비 (SNR)",
+            "value": "N/A (분류 데이터 없음)",
+            "detail": "classification 필드가 있는 이슈 없음",
+            "status": "yellow",
+        }
 
-    passed = total - noise
-    snr = round(passed / max(total, 1) * 100)
+    snr = round(signal / max(total, 1) * 100)
     return {
         "name": "신호대잡음비 (SNR)",
         "value": f"{snr}%",
-        "detail": f"입력 {total}건 / 유효 {passed}건 / 노이즈 {noise}건",
+        "detail": f"총 {total}건 / signal(A+D) {signal}건 / noise(R+T) {noise}건",
         "status": "green" if snr >= 60 else "yellow" if snr >= 40 else "red",
     }
 
 
 def calc_triage_accuracy() -> Dict:
-    """2. 트리아지 정확도 — 이슈 매칭 성공률"""
+    """2. 트리아지 정확도 — matched_issue 필드 기반 실측 매칭률.
+
+    triaged = triage_score가 있는 이슈 수
+    matched = matched_issue 필드가 실제로 존재하고 비어있지 않은 경우
+    정확도 = matched / triaged × 100
+    """
     triaged = 0
     matched = 0
 
@@ -111,15 +123,24 @@ def calc_triage_accuracy() -> Dict:
             fm = _parse_frontmatter(f)
             if fm.get("triage_score"):
                 triaged += 1
-                # triage_score가 있고 matched_issue 정보가 있으면 매칭 성공
-                matched += 1  # 현재는 triage가 된 것 자체를 매칭 성공으로 간주
+                matched_issue = str(fm.get("matched_issue", "")).strip()
+                if matched_issue and matched_issue != "''":
+                    matched += 1
 
-    rate = round(triaged / max(triaged + 1, 1) * 100) if triaged > 0 else 0
+    if triaged == 0:
+        return {
+            "name": "트리아지 정확도",
+            "value": "N/A (트리아지 데이터 없음)",
+            "detail": "triage_score가 있는 이슈 없음",
+            "status": "yellow",
+        }
+
+    accuracy = round(matched / triaged * 100)
     return {
-        "name": "트리아지 커버리지",
-        "value": f"{triaged}건",
-        "detail": f"전체 이슈 중 트리아지 완료: {triaged}건",
-        "status": "green" if triaged > 50 else "yellow" if triaged > 10 else "red",
+        "name": "트리아지 정확도",
+        "value": f"{accuracy}% ({matched}/{triaged})",
+        "detail": f"트리아지 {triaged}건 중 매칭 성공 {matched}건",
+        "status": "green" if accuracy >= 70 else "yellow" if accuracy >= 40 else "red",
     }
 
 
@@ -173,40 +194,77 @@ def calc_queue_health() -> Dict:
 
 
 def calc_data_completeness() -> Dict:
-    """5. 데이터 완전성 — owner/due_date/decision 비율"""
-    total = 0
-    has_owner = 0
-    has_due = 0
-    has_decision = 0
+    """5. 데이터 완전성 — 우선순위별 가중 완전성.
+
+    critical/high = 가중치 2, medium/low = 가중치 1.
+    breakdown을 우선순위별 dict로 변경.
+    """
+    priority_stats: Dict[str, Dict] = {}  # priority → {total, owner, due, decision}
 
     if ISSUES_DIR.exists():
         for f in ISSUES_DIR.glob("SEN-*.md"):
             fm = _parse_frontmatter(f)
-            total += 1
+            priority = fm.get("priority", "medium")
+            if priority not in priority_stats:
+                priority_stats[priority] = {
+                    "total": 0, "owner": 0, "due_date": 0, "decision": 0,
+                }
+            ps = priority_stats[priority]
+            ps["total"] += 1
 
             owner = str(fm.get("owner", "")).strip()
             if owner and owner != "''":
-                has_owner += 1
+                ps["owner"] += 1
 
             due = str(fm.get("due_date", "")).strip()
             if due and due != "''":
-                has_due += 1
+                ps["due_date"] += 1
 
             dec = str(fm.get("decision", "")).strip()
             if dec and dec != "''":
-                has_decision += 1
+                ps["decision"] += 1
 
-    pct_owner = round(has_owner / max(total, 1) * 100)
-    pct_due = round(has_due / max(total, 1) * 100)
-    pct_dec = round(has_decision / max(total, 1) * 100)
-    avg = round((pct_owner + pct_due + pct_dec) / 3)
+    # 가중 평균 계산
+    weight_map = {"critical": 2, "high": 2, "medium": 1, "low": 1}
+    total_weighted = 0
+    filled_weighted = 0
+
+    breakdown = {}
+    for pri, stats in priority_stats.items():
+        t = stats["total"]
+        if t == 0:
+            continue
+        w = weight_map.get(pri, 1)
+        pct_owner = round(stats["owner"] / t * 100)
+        pct_due = round(stats["due_date"] / t * 100)
+        pct_dec = round(stats["decision"] / t * 100)
+        breakdown[pri] = {
+            "total": t,
+            "owner": pct_owner,
+            "due_date": pct_due,
+            "decision": pct_dec,
+        }
+        # 3개 필드 × 이슈 수 × 가중치
+        total_weighted += 3 * t * w
+        filled_weighted += (stats["owner"] + stats["due_date"] + stats["decision"]) * w
+
+    avg = round(filled_weighted / max(total_weighted, 1) * 100)
+
+    # 상세 문자열
+    detail_parts = []
+    for pri in ("critical", "high", "medium", "low"):
+        if pri in breakdown:
+            bd = breakdown[pri]
+            detail_parts.append(
+                f"{pri}({bd['total']}건): 담당{bd['owner']}%/마감{bd['due_date']}%/결정{bd['decision']}%"
+            )
 
     return {
         "name": "데이터 완전성",
-        "value": f"{avg}%",
-        "detail": f"담당자 {pct_owner}% / 마감일 {pct_due}% / 결정사항 {pct_dec}%",
+        "value": f"{avg}% (가중)",
+        "detail": " | ".join(detail_parts) if detail_parts else "데이터 없음",
         "status": "green" if avg >= 50 else "yellow" if avg >= 20 else "red",
-        "breakdown": {"owner": pct_owner, "due_date": pct_due, "decision": pct_dec},
+        "breakdown": breakdown,
     }
 
 
@@ -339,20 +397,23 @@ def render_metrics_dashboard(metrics: List[Dict]) -> str:
 
     lines.append("")
 
-    # 데이터 완전성 세부
+    # 데이터 완전성 세부 (우선순위별)
     for m in metrics:
         if m["name"] == "데이터 완전성" and "breakdown" in m:
             bd = m["breakdown"]
             lines.extend([
-                "## 데이터 완전성 세부",
+                "## 데이터 완전성 세부 (우선순위별)",
                 "",
-                "```",
-                f"담당자(owner):    {'█' * (bd['owner'] // 5)}{'░' * (20 - bd['owner'] // 5)} {bd['owner']}%",
-                f"마감일(due_date): {'█' * (bd['due_date'] // 5)}{'░' * (20 - bd['due_date'] // 5)} {bd['due_date']}%",
-                f"결정(decision):   {'█' * (bd['decision'] // 5)}{'░' * (20 - bd['decision'] // 5)} {bd['decision']}%",
-                "```",
-                "",
+                "| 우선순위 | 이슈 수 | 담당자 | 마감일 | 결정사항 |",
+                "|----------|---------|--------|--------|----------|",
             ])
+            for pri in ("critical", "high", "medium", "low"):
+                if pri in bd:
+                    p = bd[pri]
+                    lines.append(
+                        f"| {pri} | {p['total']}건 | {p['owner']}% | {p['due_date']}% | {p['decision']}% |"
+                    )
+            lines.append("")
 
     return "\n".join(lines)
 

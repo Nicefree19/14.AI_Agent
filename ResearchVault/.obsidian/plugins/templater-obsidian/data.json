@@ -1,0 +1,17 @@
+{
+  "templates_folder": "Templates",
+  "trigger_on_file_creation": true,
+  "auto_jump_to_cursor": true,
+  "enable_system_commands": false,
+  "enable_folder_templates": true,
+  "folder_templates": [
+    {
+      "folder": "00-Inbox",
+      "template": "Templates/research-note"
+    },
+    {
+      "folder": "01-Sources",
+      "template": "Templates/source-note"
+    }
+  ]
+}

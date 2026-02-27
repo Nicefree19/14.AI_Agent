@@ -18,11 +18,14 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 # ================= 설정 영역 =================
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _SCRIPT_DIR.parent
+
 # 1. 감시할 구글 드라이브 로컬 경로
 WATCH_DIR = r"G:\내 드라이브\appsheet\data\복합동이슈관리대장-495417588"
 
 # 2. 결과물을 저장할 옵시디언 폴더 경로
-OBSIDIAN_INBOX = r"D:\00.Work_AI_Tool\14.AI_Agent\ResearchVault\P5-Project\01-Issues"
+OBSIDIAN_INBOX = str(_PROJECT_ROOT / "ResearchVault" / "P5-Project" / "01-Issues")
 
 # 3. 연결할 NotebookLM의 이름
 NOTEBOOK_NAME = "P5 프로젝트"
@@ -31,7 +34,7 @@ NOTEBOOK_NAME = "P5 프로젝트"
 DEBOUNCE_SECONDS = 10
 
 # 5. Python venv 경로 (NotebookLM API 호출용)
-VENV_PYTHON = r"D:\00.Work_AI_Tool\14.AI_Agent\.agent_venv\Scripts\python.exe"
+VENV_PYTHON = str(_PROJECT_ROOT / ".agent_venv" / "Scripts" / "python.exe")
 
 # 6. 무시할 파일 패턴
 IGNORE_PATTERNS = ["~$", ".tmp", ".swp", ".lock", "Thumbs.db"]
@@ -122,9 +125,10 @@ class DriveSyncHandler(FileSystemEventHandler):
         """NotebookLM 소스 동기화 (API 직접 호출)."""
         try:
             # NotebookLM MCP API 사용
+            _site_packages = str(_PROJECT_ROOT / ".agent_venv" / "Lib" / "site-packages")
             script = f"""
 import sys
-sys.path.insert(0, r"D:\\00.Work_AI_Tool\\14.AI_Agent\\.agent_venv\\Lib\\site-packages")
+sys.path.insert(0, r"{_site_packages}")
 from notebooklm_mcp.auth import load_cached_tokens
 from notebooklm_mcp.api_client import NotebookLMClient
 
@@ -161,9 +165,10 @@ else:
         """NotebookLM에서 변경 사항 분석 쿼리."""
         try:
             # P5 노트북에서 요약 가져오기
+            _site_packages = str(_PROJECT_ROOT / ".agent_venv" / "Lib" / "site-packages")
             script = f"""
 import sys
-sys.path.insert(0, r"D:\\00.Work_AI_Tool\\14.AI_Agent\\.agent_venv\\Lib\\site-packages")
+sys.path.insert(0, r"{_site_packages}")
 from notebooklm_mcp.auth import load_cached_tokens
 from notebooklm_mcp.api_client import NotebookLMClient
 

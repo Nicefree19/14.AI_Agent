@@ -17,34 +17,151 @@ import time
 from pathlib import Path
 from datetime import datetime, timedelta
 from .telegram_sender import send_files_sync, run_async_safe
+from enum import Enum
 
-_BASE_DIR = str(Path(__file__).resolve().parent.parent.parent / "telegram_data")
+from .config import (
+    TELEGRAM_DATA_DIR,
+    MESSAGES_FILE as _CFG_MESSAGES_FILE,
+    TASKS_DIR as _CFG_TASKS_DIR,
+    INDEX_FILE as _CFG_INDEX_FILE,
+    WORKING_LOCK_FILE as _CFG_WORKING_LOCK_FILE,
+    NEW_INSTRUCTIONS_FILE as _CFG_NEW_INSTRUCTIONS_FILE,
+    WORKING_LOCK_TIMEOUT,
+    is_enabled,
+)
 
-MESSAGES_FILE = os.path.join(_BASE_DIR, "telegram_messages.json")
-TASKS_DIR = os.path.join(_BASE_DIR, "tasks")
-INDEX_FILE = os.path.join(_BASE_DIR, "tasks", "index.json")
-WORKING_LOCK_FILE = os.path.join(_BASE_DIR, "working.json")
-NEW_INSTRUCTIONS_FILE = os.path.join(_BASE_DIR, "new_instructions.json")  # 🆕 작업 중 새 지시사항
-WORKING_LOCK_TIMEOUT = 1800  # 30분: 이 시간 이상 잠금 파일이 있으면 스탈로 판단
+
+# ═══════════════════════════════════════════════════════════════
+#  메시지 상태 머신 (feature flag: state_machine)
+# ═══════════════════════════════════════════════════════════════
+
+
+class MessageState(str, Enum):
+    """7단계 메시지 처리 상태."""
+    PENDING = "pending"              # 수신됨, 미처리
+    TRIAGED = "triaged"              # classify_message() 완료
+    CONTEXT_READY = "context_ready"  # combine_tasks() + 24h 컨텍스트
+    EXECUTING = "executing"          # executor 시작
+    COMPLETED = "completed"          # report_telegram() 성공
+    FAILED = "failed"                # 예외 발생
+    CLOSED = "closed"                # mark_done_telegram() 호출
+
+
+def _update_message_state(
+    message_id: int,
+    new_state: MessageState,
+    *,
+    extra: dict | None = None,
+) -> None:
+    """메시지 상태를 telegram_messages.json에 기록.
+
+    feature flag "state_machine" OFF → no-op.
+    """
+    if not is_enabled("state_machine"):
+        return
+
+    try:
+        messages = _load_messages_file()
+        for msg in messages:
+            if msg.get("message_id") == message_id:
+                msg["state"] = new_state.value
+                msg["state_updated_at"] = datetime.now().isoformat()
+                if extra:
+                    msg.setdefault("state_history", []).append({
+                        "state": new_state.value,
+                        "at": datetime.now().isoformat(),
+                        **extra,
+                    })
+                break
+        _atomic_json_write(MESSAGES_FILE, messages)
+    except Exception:
+        # 상태 기록 실패가 본 작업을 중단시키면 안 됨
+        pass
+
+
+def _load_messages_file() -> list:
+    """telegram_messages.json 로드. 파일 없으면 빈 리스트."""
+    if not os.path.exists(MESSAGES_FILE):
+        return []
+    try:
+        with open(MESSAGES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+_BASE_DIR = str(TELEGRAM_DATA_DIR)
+
+MESSAGES_FILE = str(_CFG_MESSAGES_FILE)
+TASKS_DIR = str(_CFG_TASKS_DIR)
+INDEX_FILE = str(_CFG_INDEX_FILE)
+WORKING_LOCK_FILE = str(_CFG_WORKING_LOCK_FILE)
+NEW_INSTRUCTIONS_FILE = str(_CFG_NEW_INSTRUCTIONS_FILE)
+PROJECT_CONTEXT_FILE = os.path.join(_BASE_DIR, "project_context.md")
+OBSIDIAN_WORKLOG_DIR = str(Path(__file__).resolve().parent.parent.parent / "ResearchVault" / "P5-Project" / "05-WorkLog")
+
+
+def _atomic_json_write(filepath: str, data) -> None:
+    """
+    원자적 JSON 쓰기 — 크래시/디스크풀 안전.
+
+    임시파일에 쓴 뒤 os.replace()로 원자적 교체.
+    중간 크래시 시에도 원본 파일이 손상되지 않음.
+    """
+    tmp = filepath + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, filepath)
 
 
 def load_telegram_messages():
-    """telegram_messages.json 로드"""
+    """telegram_messages.json 로드 (손상 시 .bak 복구 시도)"""
+    default = {"messages": [], "last_update_id": 0}
     if not os.path.exists(MESSAGES_FILE):
-        return {"messages": [], "last_update_id": 0}
+        return default
 
     try:
         with open(MESSAGES_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception as e:
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"⚠️ telegram_messages.json 손상: {e}")
+        # 백업에서 복구 시도
+        bak = MESSAGES_FILE + ".bak"
+        if os.path.exists(bak):
+            try:
+                with open(bak, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                print("✅ .bak에서 복구 성공")
+                _atomic_json_write(MESSAGES_FILE, data)
+                return data
+            except Exception:
+                pass
+        # 손상 파일을 .corrupt로 보존
+        corrupt = MESSAGES_FILE + f".corrupt.{int(time.time())}"
+        try:
+            os.replace(MESSAGES_FILE, corrupt)
+            print(f"⚠️ 손상 파일 보존: {corrupt}")
+        except OSError:
+            pass
+        return default
+    except OSError as e:
         print(f"⚠️ telegram_messages.json 읽기 오류: {e}")
-        return {"messages": [], "last_update_id": 0}
+        return default
 
 
 def save_telegram_messages(data):
-    """telegram_messages.json 저장"""
-    with open(MESSAGES_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """telegram_messages.json 저장 (원자적 쓰기 + .bak 롤링 백업)"""
+    # 기존 파일을 .bak으로 백업 (복구용)
+    if os.path.exists(MESSAGES_FILE):
+        try:
+            bak = MESSAGES_FILE + ".bak"
+            import shutil
+            shutil.copy2(MESSAGES_FILE, bak)
+        except OSError:
+            pass
+    _atomic_json_write(MESSAGES_FILE, data)
 
 
 def save_bot_response(chat_id, text, reply_to_message_ids, files=None):
@@ -165,6 +282,9 @@ def create_working_lock(message_id, instruction, execution_path="unknown"):
         with open(WORKING_LOCK_FILE, "x", encoding="utf-8") as f:
             json.dump(lock_data, f, ensure_ascii=False, indent=2)
         print(f"🔒 작업 잠금 생성: message_id={msg_id_str}")
+        # 상태 머신: EXECUTING
+        for mid in message_ids:
+            _update_message_state(mid, MessageState.EXECUTING)
         return True
     except FileExistsError:
         print(f"⚠️ 잠금 파일 이미 존재. 다른 작업이 진행 중입니다.")
@@ -188,8 +308,7 @@ def update_working_activity():
         # last_activity 갱신
         lock_data["last_activity"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        with open(WORKING_LOCK_FILE, "w", encoding="utf-8") as f:
-            json.dump(lock_data, f, ensure_ascii=False, indent=2)
+        _atomic_json_write(WORKING_LOCK_FILE, lock_data)
 
     except Exception as e:
         print(f"⚠️ working.json 활동 갱신 오류: {e}")
@@ -296,9 +415,8 @@ def save_new_instructions(new_messages):
         if msg["message_id"] not in existing_ids:
             data["instructions"].append(msg)
 
-    # 파일에 저장
-    with open(NEW_INSTRUCTIONS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    # 파일에 저장 (원자적 쓰기)
+    _atomic_json_write(NEW_INSTRUCTIONS_FILE, data)
 
     print(f"💾 새 지시사항 저장: {len(new_messages)}개")
 
@@ -362,8 +480,71 @@ def save_index(index_data):
 
     index_data["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    with open(INDEX_FILE, "w", encoding="utf-8") as f:
-        json.dump(index_data, f, ensure_ascii=False, indent=2)
+    _atomic_json_write(INDEX_FILE, index_data)
+
+
+def _atomic_text_write(filepath: str, text: str) -> None:
+    """원자적 텍스트 파일 쓰기."""
+    tmp = filepath + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, filepath)
+
+
+def _generate_summary(instruction: str, result_summary: str) -> str:
+    """지시사항+결과에서 1줄 요약 생성 (최대 80자). LLM 없이 규칙 기반."""
+    import re as _re
+    clean = _re.sub(r'\[요청\s*\d+\]\s*(\([^)]*\)\s*)?', '', instruction)
+    clean = clean.split("---")[0].strip()
+    clean = _re.sub(r'\(msg_\d+에 합산됨\)', '', clean).strip()
+    if not clean:
+        clean = instruction[:80]
+
+    instr_part = clean[:45].strip()
+    if len(clean) > 45:
+        instr_part += "…"
+
+    result_part = ""
+    if result_summary and result_summary != "(작업 진행 중...)":
+        result_lines = [
+            l.strip() for l in result_summary.split("\n")
+            if l.strip() and not l.strip().startswith(("━", "📋", "🤖", "**"))
+        ]
+        if result_lines:
+            result_part = result_lines[0][:35]
+            if len(result_lines[0]) > 35:
+                result_part += "…"
+
+    return f"{instr_part} → {result_part}" if result_part else instr_part
+
+
+def _extract_topics(instruction: str, result_summary: str) -> list:
+    """지시사항+결과에서 시맨틱 토픽 태그 추출 (최대 5개)."""
+    combined = f"{instruction} {result_summary}".lower()
+
+    _TOPIC_MAP = {
+        "메일분석": ["메일", "이메일", "email", "받은메일"],
+        "검토의견": ["검토의견", "shop", "승인", "리뷰"],
+        "제작현황": ["제작현황", "납품", "센코어", "작업일보", "생산"],
+        "보고서": ["보고서", "브리핑", "briefing", "일일", "주간"],
+        "PPT": ["ppt", "발표", "슬라이드", "프레젠테이션"],
+        "이슈": ["이슈", "issue", "대응", "긴급", "리스크"],
+        "도면": ["도면", "drawing", "dxf", "cad", "설계"],
+        "일정": ["일정", "공정", "납기", "리드타임", "schedule"],
+        "데이터분석": ["분석", "데이터", "엑셀", "excel", "boq"],
+        "카카오톡": ["카톡", "카카오", "kakao"],
+        "업무현황": ["현황", "대시보드", "메트릭", "상태"],
+    }
+
+    matched = []
+    for topic, triggers in _TOPIC_MAP.items():
+        if any(t in combined for t in triggers):
+            matched.append(topic)
+        if len(matched) >= 5:
+            break
+    return matched
 
 
 def update_index(message_id, instruction, result_summary="", files=None, chat_id=None, timestamp=None):
@@ -380,12 +561,18 @@ def update_index(message_id, instruction, result_summary="", files=None, chat_id
     """
     index = load_index()
 
-    # 키워드 추출 (간단한 방식: 명사 추출 대신 단어 분리)
-    keywords = []
-    for word in instruction.split():
-        if len(word) >= 2:  # 2글자 이상만
-            keywords.append(word)
-    keywords = list(set(keywords))[:10]  # 중복 제거, 최대 10개
+    # 키워드 추출
+    if is_enabled("rag_search"):
+        # W5: 조사 제거 + 스톱워드 필터링으로 향상된 키워드 추출
+        from scripts.telegram.memory_search import tokenize_query
+        keywords = tokenize_query(instruction, stopwords=_MEMORY_STOPWORDS)[:10]
+    else:
+        # 기존 동작 (간단한 방식: 단어 분리)
+        keywords = []
+        for word in instruction.split():
+            if len(word) >= 2:  # 2글자 이상만
+                keywords.append(word)
+        keywords = list(set(keywords))[:10]  # 중복 제거, 최대 10개
 
     # 기존 작업 찾기
     existing_task = None
@@ -394,11 +581,17 @@ def update_index(message_id, instruction, result_summary="", files=None, chat_id
             existing_task = task
             break
 
+    # 시맨틱 요약 + 토픽 생성
+    summary = _generate_summary(instruction, result_summary)
+    topics = _extract_topics(instruction, result_summary)
+
     task_data = {
         "message_id": message_id,
         "timestamp": timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "instruction": instruction,
         "keywords": keywords,
+        "summary": summary,
+        "topics": topics,
         "result_summary": result_summary,
         "files": files or [],
         "chat_id": chat_id,
@@ -440,7 +633,16 @@ def search_memory(keyword=None, message_id=None):
         return []
 
     if keyword:
-        # 키워드로 검색
+        # W5: rag_search ON → TF-weighted relevance scoring
+        if is_enabled("rag_search"):
+            from scripts.telegram.memory_search import tokenize_query, rank_tasks
+            tokens = tokenize_query(keyword, stopwords=_MEMORY_STOPWORDS)
+            if not tokens:
+                return []
+            ranked = rank_tasks(index["tasks"], tokens)
+            return [t for t, _s in ranked]
+
+        # ── 기존 동작 (flag OFF) ──
         matches = []
         keyword_lower = keyword.lower()
 
@@ -454,6 +656,41 @@ def search_memory(keyword=None, message_id=None):
 
     # 조건 없으면 전체 반환
     return index["tasks"]
+
+
+def load_index_summaries(limit: int = 30) -> str:
+    """전체 작업 인덱스의 요약을 경량 텍스트로 반환 (~500 tokens).
+
+    Claude Code 프롬프트에 포함하여 전체 작업 이력을 빠르게 파악.
+
+    Args:
+        limit: 최대 항목 수 (기본 30)
+
+    Returns:
+        str: 작업 요약 텍스트 (한 줄당 약 15-20 토큰)
+    """
+    index = load_index()
+    tasks = index.get("tasks", [])
+    if not tasks:
+        return "이전 작업 이력 없음."
+
+    lines = ["=== 작업 이력 요약 ==="]
+    for task in tasks[:limit]:
+        msg_id = task["message_id"]
+        summary = task.get("summary", "")
+        topics = task.get("topics", [])
+
+        if not summary:
+            summary = _generate_summary(
+                task.get("instruction", ""),
+                task.get("result_summary", ""),
+            )
+
+        topic_str = f" [{','.join(topics)}]" if topics else ""
+        files_str = f" 📎{len(task.get('files', []))}" if task.get("files") else ""
+        lines.append(f"#{msg_id}{topic_str}: {summary}{files_str}")
+
+    return "\n".join(lines)
 
 
 def get_task_dir(message_id):
@@ -543,7 +780,7 @@ def get_24h_context(messages, current_message_id):
             else:
                 file_info = ""
 
-            context_lines.append(f"[{msg['timestamp']}] 🤖 소놀봇: {text_preview}{file_info}")
+            context_lines.append(f"[{msg['timestamp']}] 🤖 자비스: {text_preview}{file_info}")
 
     if len(context_lines) == 1:
         return "최근 24시간 이내 대화 내역이 없습니다."
@@ -774,6 +1011,10 @@ def check_telegram():
         # 메시지 분류
         msg_class = classify_message(instruction)
 
+        # 상태 전이: TRIAGED
+        _update_message_state(message_id, MessageState.TRIAGED,
+                              extra={"classification": msg_class})
+
         # Trash: 무시 (processed 마킹만)
         if msg_class == "trash":
             msg["processed"] = True
@@ -834,12 +1075,14 @@ def group_by_chat_id(pending_tasks):
     return groups
 
 
-def combine_tasks(pending_tasks):
+def combine_tasks(pending_tasks, include_24h_context=True):
     """
     여러 미처리 메시지를 하나의 통합 작업으로 합산
 
     Args:
         pending_tasks: check_telegram()이 반환한 작업 리스트
+        include_24h_context: True면 24시간 대화 컨텍스트 포함 (Claude Code용),
+                            False면 제외 (Python 직행 스킬용 — 토큰 절약)
 
     Returns:
         dict: {
@@ -946,8 +1189,12 @@ def combine_tasks(pending_tasks):
 
     # 24시간 컨텍스트를 combined_instruction에 포함 (Claude가 직접 볼 수 있도록)
     context_24h = sorted_tasks[0]['context_24h']
-    if context_24h and context_24h != "최근 24시간 이내 대화 내역이 없습니다.":
+    if include_24h_context and context_24h and context_24h != "최근 24시간 이내 대화 내역이 없습니다.":
         combined_instruction = combined_instruction + "\n\n---\n\n[참고사항]\n" + context_24h
+
+    # 상태 전이: CONTEXT_READY (모든 메시지)
+    for task in sorted_tasks:
+        _update_message_state(task['message_id'], MessageState.CONTEXT_READY)
 
     return {
         "combined_instruction": combined_instruction,
@@ -1072,7 +1319,7 @@ def report_telegram(instruction, result_text, chat_id, timestamp, message_id, fi
         timestamps = [timestamp]
 
     # 결과 메시지 작성 (지시사항/참고사항 생략 - 텔레그램 대화창에 이미 있음)
-    message = f"""🤖 **소놀봇 작업 완료**
+    message = f"""🤖 **자비스 작업 완료**
 
 **✅ 결과:**
 {result_text}
@@ -1085,12 +1332,31 @@ def report_telegram(instruction, result_text, chat_id, timestamp, message_id, fi
     if len(message_ids) > 1:
         message += f"\n\n_합산 처리: {len(message_ids)}개 메시지_"
 
+    # 파일 경로 resolve (bare filename → task_dir 기준 절대경로)
+    if files:
+        task_dir = get_task_dir(main_message_id)
+        resolved_files = []
+        for f in files:
+            if os.path.isabs(f) and os.path.exists(f):
+                resolved_files.append(f)
+            else:
+                candidate = os.path.join(task_dir, f)
+                if os.path.exists(candidate):
+                    resolved_files.append(candidate)
+                elif os.path.exists(f):
+                    resolved_files.append(os.path.abspath(f))
+                else:
+                    print(f"⚠️ 파일 경로 resolve 실패: {f} (task_dir={task_dir})")
+        files = resolved_files
+
     # 텔레그램으로 전송
     print(f"\n📤 텔레그램으로 결과 전송 중... (chat_id: {chat_id})")
     success = send_files_sync(chat_id, message, files or [])
 
     if success:
         print("✅ 결과 전송 완료!")
+        # 상태 머신: COMPLETED
+        _update_message_state(main_message_id, MessageState.COMPLETED)
 
         # 🆕 봇 응답을 telegram_messages.json에 저장 (대화 컨텍스트 유지)
         save_bot_response(
@@ -1101,6 +1367,11 @@ def report_telegram(instruction, result_text, chat_id, timestamp, message_id, fi
         )
     else:
         print("❌ 결과 전송 실패!")
+        # 상태 머신: FAILED
+        _update_message_state(
+            main_message_id, MessageState.FAILED,
+            extra={"reason": "send_files_sync failed"},
+        )
         result_text = f"[전송 실패] {result_text}"
         files = []  # 파일 미전송이므로 보낸파일 비움
 
@@ -1146,6 +1417,30 @@ def report_telegram(instruction, result_text, chat_id, timestamp, message_id, fi
         timestamp=timestamps[0]
     )
 
+    # 프로젝트 컨텍스트 자동 갱신 (Strategy C)
+    _update_project_context(
+        instruction=instruction,
+        result_summary=result_text[:200],
+        files=[os.path.basename(f) for f in (files or [])],
+        timestamp=timestamps[0],
+        message_id=main_message_id,
+    )
+
+    # Obsidian 지식베이스에 워크로그 자동 저장
+    obsidian_ok = _save_to_obsidian(
+        instruction=instruction,
+        result_text=result_text,
+        files=files or [],
+        timestamp=timestamps[0],
+        message_id=main_message_id,
+    )
+    if not obsidian_ok:
+        try:
+            send_message_sync(chat_id,
+                "⚠️ Obsidian 워크로그 저장에 실패했습니다. 작업 결과는 정상 전달되었습니다.")
+        except Exception:
+            pass
+
     # 추가 메시지들 참조 파일 업데이트
     for i, (msg_id, ts) in enumerate(zip(message_ids[1:], timestamps[1:]), 2):
         ref_dir = get_task_dir(msg_id)
@@ -1174,6 +1469,8 @@ def report_telegram(instruction, result_text, chat_id, timestamp, message_id, fi
     print(f"💾 메모리 저장 완료: {task_dir}/task_info.txt")
     if len(message_ids) > 1:
         print(f"   합산 메시지: {len(message_ids)}개 처리 완료")
+
+    return success
 
 
 def mark_done_telegram(message_id):
@@ -1205,6 +1502,10 @@ def mark_done_telegram(message_id):
 
     save_telegram_messages(data)
 
+    # 상태 머신: CLOSED
+    for mid in message_ids:
+        _update_message_state(mid, MessageState.CLOSED)
+
     # 🆕 새 지시사항 파일 정리
     clear_new_instructions()
 
@@ -1214,27 +1515,80 @@ def mark_done_telegram(message_id):
         print(f"✅ 메시지 {message_ids[0]} 처리 완료 표시")
 
 
-def load_memory():
+def load_memory(limit=20, keywords=None, summary_only=False):
     """
-    기존 메모리 파일 전부 읽기 (tasks/*/task_info.txt)
+    기존 메모리 파일 읽기 (tasks/*/task_info.txt)
+
+    Args:
+        limit: 최대 반환 개수 (기본 20건). 0 또는 None이면 전부 반환.
+        keywords: 키워드 리스트. 있으면 인덱스 기반 필터링 (관련 메모리만 로드).
+        summary_only: True면 디스크 읽기 없이 인덱스 메타데이터만 반환 (초경량).
 
     Returns:
-        list: 메모리 내용 리스트
-        [
-            {
-                "message_id": int,
-                "task_dir": str,
-                "content": str
-            },
-            ...
-        ]
+        list: 메모리 내용 리스트 [{message_id, task_dir, content}, ...]
     """
     if not os.path.exists(TASKS_DIR):
         return []
 
-    memories = []
+    # ── 키워드 필터 모드: 인덱스 기반 빠른 매칭 ──
+    if keywords:
+        index = load_index()
+        candidates = index.get("tasks", [])
 
-    # tasks/ 폴더 내 모든 msg_* 폴더 탐색
+        # W5: rag_search ON → TF-weighted relevance scoring
+        if is_enabled("rag_search"):
+            from scripts.telegram.memory_search import rank_tasks
+            ranked = rank_tasks(candidates, keywords)
+            filtered = [t for t, _s in ranked]
+        else:
+            # ── 기존 동작 (flag OFF) ──
+            kw_set = {k.lower() for k in keywords}
+
+            filtered = []
+            for t in candidates:
+                text_pool = (
+                    t.get("instruction", "").lower() + " "
+                    + " ".join(t.get("topics", [])).lower() + " "
+                    + " ".join(t.get("keywords", [])).lower()
+                )
+                if any(kw in text_pool for kw in kw_set):
+                    filtered.append(t)
+
+        # rag_search ON → 이미 관련성순; OFF → message_id 역순
+        if not is_enabled("rag_search"):
+            filtered.sort(key=lambda x: x["message_id"], reverse=True)
+        if limit and limit > 0:
+            filtered = filtered[:limit]
+
+        if summary_only:
+            return [
+                {
+                    "message_id": t["message_id"],
+                    "task_dir": t.get("task_dir", ""),
+                    "content": f"[지시] {t['instruction'][:100]}\n[결과] {t.get('result_summary', '')[:150]}",
+                }
+                for t in filtered
+            ]
+
+        # 전체 내용 로드 (매칭된 것만)
+        memories = []
+        for t in filtered:
+            td = t.get("task_dir", os.path.join(TASKS_DIR, f"msg_{t['message_id']}"))
+            tf = os.path.join(td, "task_info.txt")
+            if os.path.exists(tf):
+                try:
+                    with open(tf, "r", encoding="utf-8") as f:
+                        memories.append({
+                            "message_id": t["message_id"],
+                            "task_dir": td,
+                            "content": f.read(),
+                        })
+                except Exception:
+                    pass
+        return memories
+
+    # ── 기존 동작 (필터 없음, 하위 호환) ──
+    memories = []
     for task_folder in os.listdir(TASKS_DIR):
         if task_folder.startswith("msg_"):
             task_dir = os.path.join(TASKS_DIR, task_folder)
@@ -1242,9 +1596,7 @@ def load_memory():
 
             if os.path.exists(task_info_file):
                 try:
-                    # message_id 추출 (msg_5 → 5)
                     message_id = int(task_folder.split("_")[1])
-
                     with open(task_info_file, "r", encoding="utf-8") as f:
                         content = f.read()
                         memories.append({
@@ -1255,10 +1607,385 @@ def load_memory():
                 except Exception as e:
                     print(f"⚠️ {task_folder}/task_info.txt 읽기 오류: {e}")
 
-    # message_id 역순 정렬 (최신순)
     memories.sort(key=lambda x: x["message_id"], reverse=True)
-
+    if limit is not None and limit > 0:
+        memories = memories[:limit]
     return memories
+
+
+# ── 스톱워드 (메모리 키워드 추출 시 필터링) ──
+_MEMORY_STOPWORDS = {
+    "해줘", "하세요", "해주세요", "합니다", "있는", "하는", "위해",
+    "이거", "이것", "저것", "그거", "그것", "어떤", "어떻게", "그리고",
+    "또는", "하고", "에서", "으로", "부터", "까지", "대한", "위한",
+    "요청", "작업", "확인", "정리", "생성", "만들어", "좀", "것",
+}
+
+
+def load_memory_for_task(instruction: str, limit: int = 5) -> list:
+    """지시사항에서 키워드를 추출하여 관련 메모리만 로드.
+
+    Args:
+        instruction: 현재 작업의 지시사항 텍스트
+        limit: 최대 반환 개수 (기본 5)
+
+    Returns:
+        list: load_memory()와 동일 형식
+    """
+    # W5: rag_search ON → 조사 제거 + 스톱워드 필터링으로 향상된 키워드 추출
+    if is_enabled("rag_search"):
+        from scripts.telegram.memory_search import tokenize_query
+        kws = tokenize_query(instruction, stopwords=_MEMORY_STOPWORDS)[:8]
+    else:
+        # ── 기존 동작 (flag OFF) ──
+        words = instruction.replace("\n", " ").split()
+        kws = []
+        seen = set()
+        for w in words:
+            wl = w.lower().strip("[]()\"'.,!?")
+            if len(wl) >= 2 and wl not in _MEMORY_STOPWORDS and wl not in seen:
+                seen.add(wl)
+                kws.append(wl)
+            if len(kws) >= 8:
+                break
+
+    if not kws:
+        return load_memory(limit=limit)
+
+    results = load_memory(limit=limit, keywords=kws)
+
+    # 결과가 너무 적으면 최근 작업으로 보충
+    if len(results) < 2:
+        recent = load_memory(limit=3)
+        existing_ids = {r["message_id"] for r in results}
+        for r in recent:
+            if r["message_id"] not in existing_ids:
+                results.append(r)
+                if len(results) >= limit:
+                    break
+
+    return results
+
+
+# ═══════════════════════════════════════════════════════════════
+#  프로젝트 컨텍스트 자동 갱신 (Strategy C)
+# ═══════════════════════════════════════════════════════════════
+
+def _parse_project_context(text: str) -> dict:
+    """기존 project_context.md를 파싱하여 dict로 반환.
+
+    Returns:
+        dict: {
+            "recent_completions": [{"msg_id": int, "summary": str, "date": str}, ...],
+            "contacts": set of str,
+            "companies": set of str,
+            "issue_codes": set of str,
+            "custom_notes": str,
+        }
+    """
+    import re as _re
+
+    ctx = {
+        "recent_completions": [],
+        "contacts": set(),
+        "companies": set(),
+        "issue_codes": set(),
+        "custom_notes": "",
+    }
+
+    if not text.strip():
+        return ctx
+
+    # --- 최근 완료 파싱 ---
+    comp_block = _re.search(
+        r"## 최근 완료 작업.*?\n((?:- .*\n)*)", text
+    )
+    if comp_block:
+        for line in comp_block.group(1).strip().split("\n"):
+            m = _re.match(r"- #(\d+)\s+\(([^)]+)\)\s*(.*)", line)
+            if m:
+                ctx["recent_completions"].append({
+                    "msg_id": int(m.group(1)),
+                    "date": m.group(2),
+                    "summary": m.group(3).strip(),
+                })
+
+    # --- 연락처 파싱 ---
+    contact_block = _re.search(
+        r"## 주요 연락처.*?\n((?:- .*\n)*)", text
+    )
+    if contact_block:
+        for line in contact_block.group(1).strip().split("\n"):
+            name = line.lstrip("- ").strip()
+            if name:
+                ctx["contacts"].add(name)
+
+    # --- 회사/조직 파싱 ---
+    company_block = _re.search(
+        r"## 관련 조직.*?\n((?:- .*\n)*)", text
+    )
+    if company_block:
+        for line in company_block.group(1).strip().split("\n"):
+            name = line.lstrip("- ").strip()
+            if name:
+                ctx["companies"].add(name)
+
+    # --- 이슈 코드 파싱 ---
+    issue_block = _re.search(
+        r"## 이슈 코드.*?\n((?:- .*\n)*)", text
+    )
+    if issue_block:
+        for line in issue_block.group(1).strip().split("\n"):
+            code = line.lstrip("- ").strip()
+            if code:
+                ctx["issue_codes"].add(code)
+
+    # --- 사용자 메모 파싱 ---
+    notes_block = _re.search(
+        r"## 메모\n(.*?)(?=\n## |\Z)", text, _re.DOTALL
+    )
+    if notes_block:
+        ctx["custom_notes"] = notes_block.group(1).strip()
+
+    return ctx
+
+
+def _write_project_context(ctx: dict) -> None:
+    """dict를 project_context.md 마크다운으로 원자적 기록."""
+    lines = ["# P5 프로젝트 컨텍스트", ""]
+
+    # 최근 완료 (최대 7개)
+    lines.append("## 최근 완료 작업")
+    for task in ctx.get("recent_completions", [])[:7]:
+        lines.append(f"- #{task['msg_id']} ({task['date']}) {task['summary']}")
+    lines.append("")
+
+    # 연락처
+    contacts = sorted(ctx.get("contacts", set()))
+    if contacts:
+        lines.append("## 주요 연락처")
+        for c in contacts[:20]:
+            lines.append(f"- {c}")
+        lines.append("")
+
+    # 조직
+    companies = sorted(ctx.get("companies", set()))
+    if companies:
+        lines.append("## 관련 조직")
+        for c in companies[:15]:
+            lines.append(f"- {c}")
+        lines.append("")
+
+    # 이슈 코드
+    issue_codes = sorted(ctx.get("issue_codes", set()))
+    if issue_codes:
+        lines.append("## 이슈 코드")
+        for code in issue_codes[:30]:
+            lines.append(f"- {code}")
+        lines.append("")
+
+    # 메모
+    if ctx.get("custom_notes"):
+        lines.append("## 메모")
+        lines.append(ctx["custom_notes"])
+        lines.append("")
+
+    _atomic_text_write(PROJECT_CONTEXT_FILE, "\n".join(lines))
+
+
+def _update_project_context(
+    instruction: str,
+    result_summary: str,
+    files: list,
+    timestamp: str,
+    message_id: int,
+) -> None:
+    """report_telegram() 호출 시 project_context.md 자동 갱신.
+
+    - 최근 완료 작업 추가 (최대 7개 유지)
+    - 인물/조직/이슈 코드 자동 추출 & 누적
+    """
+    import re as _re
+
+    # 기존 컨텍스트 로드
+    existing_text = ""
+    if os.path.exists(PROJECT_CONTEXT_FILE):
+        try:
+            with open(PROJECT_CONTEXT_FILE, "r", encoding="utf-8") as f:
+                existing_text = f.read()
+        except Exception:
+            pass
+
+    ctx = _parse_project_context(existing_text)
+
+    # --- 1. 최근 완료 추가 ---
+    summary = _generate_summary(instruction, result_summary)
+    date_str = timestamp[:10] if isinstance(timestamp, str) and len(timestamp) >= 10 else datetime.now().strftime("%Y-%m-%d")
+
+    # 동일 msg_id가 이미 있으면 교체
+    ctx["recent_completions"] = [
+        t for t in ctx["recent_completions"] if t["msg_id"] != message_id
+    ]
+    ctx["recent_completions"].insert(0, {
+        "msg_id": message_id,
+        "date": date_str,
+        "summary": summary,
+    })
+    # 최대 7개 유지
+    ctx["recent_completions"] = ctx["recent_completions"][:7]
+
+    # --- 2. 엔티티 추출 ---
+    combined = f"{instruction} {result_summary}"
+
+    # 인물 (한글 이름 + 직함)
+    _TITLE_PATTERN = _re.compile(
+        r"([가-힣]{2,4})\s*(전무|상무|부장|차장|과장|대리|사원|소장|팀장|실장|센터장|이사|대표|사장|본부장|부본부장|위원|박사|교수|기사|기술사)"
+    )
+    for m in _TITLE_PATTERN.finditer(combined):
+        ctx["contacts"].add(f"{m.group(1)} {m.group(2)}")
+
+    # 조직/회사 (자주 등장하는 패턴)
+    _COMPANY_PATTERN = _re.compile(
+        r"([가-힣A-Za-z]{2,10})\s*(주식회사|건설|엔지니어링|설계|감리|시공사|E&C|이앤씨|컨설팅)"
+    )
+    for m in _COMPANY_PATTERN.finditer(combined):
+        ctx["companies"].add(f"{m.group(1)} {m.group(2)}")
+
+    # 이슈 코드 (SEN-001, RFI-002, NCR-003 등)
+    _ISSUE_PATTERN = _re.compile(r"\b([A-Z]{2,5}-\d{2,5})\b")
+    for m in _ISSUE_PATTERN.finditer(combined):
+        ctx["issue_codes"].add(m.group(1))
+
+    # --- 3. 기록 ---
+    try:
+        _write_project_context(ctx)
+    except Exception as e:
+        print(f"⚠️ project_context.md 갱신 실패: {e}")
+
+
+def load_project_context() -> str:
+    """프로젝트 컨텍스트 파일 로드.
+
+    Returns:
+        str: project_context.md 내용 (약 200-400 tokens). 없으면 빈 문자열.
+    """
+    if not os.path.exists(PROJECT_CONTEXT_FILE):
+        return ""
+    try:
+        with open(PROJECT_CONTEXT_FILE, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        print(f"⚠️ project_context.md 읽기 오류: {e}")
+        return ""
+
+
+def _save_to_obsidian(
+    instruction: str,
+    result_text: str,
+    files: list,
+    timestamp: str,
+    message_id: int,
+) -> bool:
+    """작업 완료 시 Obsidian 지식베이스에 워크로그 노트 자동 저장.
+
+    ResearchVault/P5-Project/05-WorkLog/ 에 날짜별 마크다운 파일 생성.
+    """
+    import re as _re
+
+    try:
+        os.makedirs(OBSIDIAN_WORKLOG_DIR, exist_ok=True)
+
+        # 날짜/시간 파싱
+        if isinstance(timestamp, str) and len(timestamp) >= 10:
+            date_str = timestamp[:10]
+        else:
+            date_str = datetime.now().strftime("%Y-%m-%d")
+
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 지시사항에서 제목 추출 (첫 줄, 50자 이내)
+        first_line = instruction.split("\n")[0].strip()
+        # "[요청 N]" 패턴 제거
+        first_line = _re.sub(r"\[요청\s*\d+\]\s*\([^)]*\)\s*", "", first_line).strip()
+        if len(first_line) > 50:
+            first_line = first_line[:50]
+        # 파일명에 사용 불가한 문자 제거
+        safe_title = _re.sub(r'[\\/*?:"<>|]', "", first_line).strip()
+        if not safe_title:
+            safe_title = f"작업_{message_id}"
+
+        filename = f"{date_str}-msg{message_id}-{safe_title}.md"
+        filepath = os.path.join(OBSIDIAN_WORKLOG_DIR, filename)
+
+        # 태그 자동 추출
+        tags = ["project/p5", "type/worklog"]
+        tag_patterns = {
+            "topic/mail": ["메일", "이메일", "email", "outlook"],
+            "topic/issue": ["이슈", "issue", "SEN-"],
+            "topic/fabrication": ["제작", "fabrication", "센코어"],
+            "topic/drawing": ["도면", "drawing", "shop", "AFC"],
+            "topic/briefing": ["브리핑", "briefing", "보고서"],
+            "topic/kakao": ["카카오", "카톡", "kakao"],
+            "topic/quantity": ["물량", "BOQ", "quantity"],
+        }
+        combined_text = f"{instruction} {result_text}".lower()
+        for tag, keywords in tag_patterns.items():
+            if any(kw.lower() in combined_text for kw in keywords):
+                tags.append(tag)
+
+        # 관련 이슈 코드 추출
+        issue_codes = _re.findall(r"\b([A-Z]{2,5}-\d{2,5})\b", f"{instruction} {result_text}")
+        issue_links = ""
+        if issue_codes:
+            unique_codes = list(dict.fromkeys(issue_codes))[:10]
+            issue_links = "\n".join([f"- [[{code}]]" for code in unique_codes])
+
+        # 결과 텍스트 정리 (최대 2000자)
+        result_clean = result_text[:2000]
+        if len(result_text) > 2000:
+            result_clean += "\n\n_(결과 일부 생략)_"
+
+        # 파일 목록
+        files_section = ""
+        if files:
+            file_names = [os.path.basename(f) for f in files]
+            files_section = "\n## 첨부 파일\n" + "\n".join([f"- `{fn}`" for fn in file_names])
+
+        # Obsidian 노트 작성
+        content = f"""---
+title: "{safe_title}"
+date: {date_str}
+created: {now_str}
+message_id: {message_id}
+tags: [{", ".join(tags)}]
+---
+
+# {safe_title}
+
+## 지시사항
+{instruction}
+
+## 결과
+{result_clean}
+{files_section}
+"""
+        if issue_links:
+            content += f"\n## 관련 이슈\n{issue_links}\n"
+
+        content += f"""
+---
+_Source: Telegram msg_{message_id} | {date_str}_
+"""
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        print(f"📝 Obsidian 워크로그 저장: {filename}")
+        return True
+
+    except Exception as e:
+        print(f"⚠️ Obsidian 워크로그 저장 실패: {e}")
+        return False
 
 
 # 테스트 코드

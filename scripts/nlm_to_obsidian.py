@@ -21,22 +21,20 @@ except ImportError as e:
     print("notebooklm-mcp-server가 설치되어 있는지 확인하세요.")
     sys.exit(1)
 
+# ─── sys.path 보정 (bare import 호환) ──────────────────────
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
 # ─── 설정 ─────────────────────────────────────────────────
-VAULT_PATH = Path(r"D:\00.Work_AI_Tool\14.AI_Agent\ResearchVault")
+from p5_config import VAULT_PATH, SCRIPT_DIR
+from p5_utils import setup_logger
+
 PROJECTS_DIR = VAULT_PATH / "03-Projects"
 NOTES_DIR = VAULT_PATH / "02-Notes"
 SOURCES_DIR = VAULT_PATH / "01-Sources"
-LOG_FILE = Path(r"D:\00.Work_AI_Tool\14.AI_Agent\scripts\nlm_sync.log")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-log = logging.getLogger("nlm_to_obsidian")
+log = setup_logger("nlm_to_obsidian", SCRIPT_DIR / "nlm_sync.log")
 
 
 # ─── Alert ──────────────────────────────────────────────────
@@ -162,6 +160,35 @@ def slugify(text: str) -> str:
     return text[:80]
 
 
+# ─── Auto-Linker Setup ──────────────────────────────────────
+try:
+    from p5_autolinker import AutoLinker
+
+    _linker = None
+except ImportError:
+    import logging
+
+    logging.getLogger().warning("p5_autolinker 모듈을 찾을 수 없습니다.")
+    _linker = None
+
+
+def _auto_link(text: str) -> str:
+    global _linker
+    if not text:
+        return text
+
+    if _linker is None:
+        try:
+            _linker = AutoLinker()
+            _linker.build_index()
+        except NameError:
+            return text
+        except Exception:
+            return text
+
+    return _linker.link_text(text)
+
+
 # ─── 마크다운 변환 ────────────────────────────────────────
 def build_obsidian_note(
     title: str,
@@ -173,6 +200,9 @@ def build_obsidian_note(
 ) -> str:
     """NotebookLM 인사이트를 Obsidian 마크다운으로 변환"""
     today = datetime.now().strftime("%Y-%m-%d")
+
+    # Auto-Linking
+    summary_text = _auto_link(summary_text)
 
     # YAML Frontmatter
     frontmatter = {

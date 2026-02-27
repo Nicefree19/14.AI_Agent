@@ -19,6 +19,9 @@ from .telegram_bot import (
     report_telegram,
     mark_done_telegram,
     load_memory,
+    load_memory_for_task,
+    load_index_summaries,
+    load_project_context,
     get_task_dir,
     update_working_activity,
 )
@@ -39,6 +42,9 @@ __all__ = [
     "report_telegram",
     "mark_done_telegram",
     "load_memory",
+    "load_memory_for_task",
+    "load_index_summaries",
+    "load_project_context",
     "get_task_dir",
     "update_working_activity",
     # telegram_listener
